@@ -36,6 +36,9 @@ describe("convertArtifactAnatomy", () => {
     expect(anatomy.sections.flatMap((section) => section.blocks)).toEqual(
       expect.arrayContaining(["MIXTURES", "CALCULATIONS", "ISOTOPESLIST", "SCATxx"]),
     );
+    const xsBody = anatomy.sections.find((section) => section.id === "xs")?.body;
+    expect(xsBody).toContain("not a separate output vector");
+    expect(xsBody).toContain("NTOT0 minus the outgoing P0 scatter row");
     expect(anatomy.sections.find((section) => section.id === "equivalence")?.body).toContain(
       "ADF",
     );

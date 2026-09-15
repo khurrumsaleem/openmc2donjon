@@ -13,18 +13,19 @@ export default function OpenmcSphWorkflowPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-[10px] uppercase tracking-[0.14em] text-emerald-300">
-            OpenMC-side SPH route
+            Recommended physical-equivalence route
           </div>
           <h3 className="mt-1 text-sm font-semibold tracking-tight">
-            Matched fine-reference and homogenized-MG models stay in OpenMC
+            Heterogeneous CE fine reference → homogenized MG coarse model
           </h3>
           <p className="mt-1 max-w-3xl text-[12px] leading-5 text-[var(--fg-2)]">
-            This route does not iterate the downstream DONJON consumer for SPH. Run
-            the fine reference and homogenized MG models with the same boundary and
-            project-declared domain order, compute the next SPH update
-            from the paired OpenMC flux fields, re-run OpenMC MG, and repeat until
-            the update residual converges. Only then apply the factors to the
-            Converter handoff.
+            The CE and MG geometries are intentionally different. Match the CE
+            tally bins to the MG transport group boundaries, and align the physical
+            state, boundary conditions, and declared fine-to-coarse domain mapping;
+            compute the next rate-preserving SPH update from the paired OpenMC flux
+            fields, rerun OpenMC MG, and repeat until the update residual converges.
+            Apply the factors to write the corrected HDF5, then enter Converter as
+            the formal handoff boundary.
           </p>
           <p className="mt-2 max-w-3xl text-[12px] leading-5 text-amber-200/85">
             The production rule is physical and contains no fitted k-effective
@@ -74,6 +75,10 @@ export default function OpenmcSphWorkflowPanel({
               {step.active ? (
                 <span className="text-[11px] text-[var(--fg-3)]">
                   Copy from the CLI preview
+                </span>
+              ) : step.id === "sph-sidecar" ? (
+                <span className="text-[11px] text-[var(--fg-3)]">
+                  Enter project thresholds in this step
                 </span>
               ) : (
                 <CopyCliButton value={step.cli} compact />

@@ -16,6 +16,7 @@ const EMPTY_XS: PlottableCrossSections = {
   total: null,
   transport_total: null,
   absorption: null,
+  reduced_absorption: null,
   fission: null,
   nu_fission: null,
   chi: null,

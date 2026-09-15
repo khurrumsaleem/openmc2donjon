@@ -19,6 +19,26 @@ The domain mapping is spatial:
 one OpenMC MGXS domain -> one cross-section set -> one DONJON mixture
 ```
 
+Converter is the mandatory boundary for every formal handoff. Optional
+physical SPH runs upstream of that final conversion:
+
+```text
+heterogeneous OpenMC CE fine reference
+  -> conservative comparison-domain collapse
+  -> homogenized OpenMC MG coarse solve
+  -> rate-preserving SPH iteration
+  -> corrected MGXS HDF5 with sph_applied=true
+  -> Converter -> L_MULTICOMPO or L_MACROLIB + receipt
+```
+
+The fine and coarse geometries are not identical. They share energy groups,
+physical state and boundary conditions, and a complete non-overlapping map that
+preserves each comparison domain's volume and integrated reference rates.
+It preserves the integrated reference flux as well as the reaction rates.
+Native DRAGON `SPH:` is available only as an advanced external-solver project
+route: Converter writes its uncorrected reference object first, and the external
+installation owns the numerical iteration.
+
 ## Package Modules
 
 | Module | Responsibility |
@@ -32,6 +52,10 @@ one OpenMC MGXS domain -> one cross-section set -> one DONJON mixture
 | `openmc2donjon.homogeneous_face_flux` | Diffusion-current homogeneous face-flux reconstruction for the flux-ratio ADF denominator. |
 | `openmc2donjon.face_flux_check` | Contract preflight for heterogeneous and homogeneous face-flux inputs before ADF sidecar generation. |
 | `openmc2donjon.adf_augment` | ADF/DF sidecar injector for adding computed discontinuity factors to an MGXS HDF5 handoff. |
+| `openmc2donjon.sph_iteration` | Rate-preserving (or diagnostic flux-target) SPH table update from aligned CE-reference and MG-coarse comparison-domain fluxes. |
+| `openmc2donjon.openmc_sph_sidecar` | Standard OpenMC CE/MG SPH sidecar construction and derivation provenance. |
+| `openmc2donjon.sph_apply` | `XS / NSPH` application to OpenMC-native MG libraries for iteration and to Converter-facing HDF5 for final handoff. |
+| `openmc2donjon.native_sph_validation` | Read-only acceptance audit for an advanced external native-DRAGON deck, listing, and corrected object; it does not implement the DRAGON solver. |
 | `openmc2donjon.multicompo` | `L_MULTICOMPO` container writer for one-state spatial-domain MGXS data, with experimental `BURN`-axis histories. |
 | `openmc2donjon.macrolib` | root `L_MACROLIB` writer for direct DONJON ingestion. |
 | `openmc2donjon.mgxs_input_contract` | Packaged HDF5 input-contract preflight used by `openmc2donjon check`. |

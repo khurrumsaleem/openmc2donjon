@@ -1,7 +1,7 @@
-"""Summarize the CE/MG OpenMC-side SPH minicase outputs.
+"""Summarize the same-partition CE/MG OpenMC-side SPH diagnostic.
 
 The report is intentionally small and auditable.  It does not decide whether
-the minicase is a benchmark; it records what happened in one run:
+the minicase is accepted physical SPH; it records what happened in one run:
 
 * CE and MG flux uncertainty levels,
 * SPH factor ranges by mixture,
@@ -20,6 +20,10 @@ import numpy as np
 
 
 SUMMARY_SCHEMA = "openmc2donjon.openmc-ce-mg-sph-physics-summary.v1"
+# These names and their JSON counterparts are retained for v1-schema
+# compatibility.  In this same-partition flux-target example, "production"
+# means only the historical high-statistics handoff threshold; it does not
+# mean fine-to-coarse, rate-preserving physical-SPH acceptance.
 PRODUCTION_FLUX_REL_STD_DEV = 0.05
 DEMONSTRATION_FLUX_REL_STD_DEV = 0.30
 REACTION_RATE_DATASETS = ("absorption", "fission", "nu_fission")
@@ -147,7 +151,7 @@ def summarize_handoff(handoff_dir: Path) -> dict[str, Any]:
 
     return {
         "schema": SUMMARY_SCHEMA,
-        "route": "OpenMC CE reference + OpenMC MG same geometry -> OpenMC-side SPH",
+        "route": "Diagnostic OpenMC CE/MG same-partition flux comparison",
         "handoff_dir": str(handoff_dir),
         **sph_update_policy,
         "mixture_count": len(mixture_names),
@@ -204,7 +208,8 @@ def summarize_handoff(handoff_dir: Path) -> dict[str, Any]:
             "macrolib_ascii_path": str(paths["macrolib_ascii"]),
             "accepted_sph_consumption_format": "macrolib",
             # Backward-compatible aliases used by the web summary panel.  These
-            # point at the accepted DONJON SPH consumption artifact.
+            # point at the checked DONJON NSPH data-carriage artifact.  The
+            # "accepted" key name is retained for schema compatibility.
             "ascii_nsp_block_count": macrolib_nsp_block_count,
             "ascii_path": str(paths["macrolib_ascii"]),
             "augmented_hdf5_path": str(paths["augmented_mgxs"]),
@@ -238,14 +243,18 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- OpenMC SPH decision: `{summary['decisions']['openmc_sph']}`",
         f"- SPH augment decision: `{summary['decisions']['sph_augment']}`",
         "",
-        "## Quality",
+        "## Diagnostic Handoff Quality",
         "",
-        f"- Decision: `{quality.get('decision', 'unknown')}`",
-        f"- Production-ready: `{quality.get('production_ready', False)}`",
+        f"- Historical schema decision: `{quality.get('decision', 'unknown')}`",
+        (
+            "- High-statistics handoff flag "
+            f"(legacy `production_ready`): `{quality.get('production_ready', False)}`"
+        ),
         f"- Demonstration-quality: `{quality.get('demonstration_quality', False)}`",
         f"- Max flux relative std_dev: {_fmt(float(quality.get('max_flux_relative_std_dev', 0.0)))}",
-        f"- Production threshold: {_fmt(production_threshold)}",
+        f"- Diagnostic statistics threshold (legacy production field): {_fmt(production_threshold)}",
         f"- Demonstration threshold: {_fmt(demonstration_threshold)}",
+        "- Physical-SPH acceptance: `false` (same partition and flux target)",
         "",
         *_quality_note_lines(quality),
         "",
@@ -273,7 +282,10 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "## Handoff",
         "",
         f"- Augmented HDF5 has SPH datasets: `{handoff['augmented_hdf5_has_sph']}`",
-        f"- Accepted SPH consumption format: `{handoff['accepted_sph_consumption_format']}`",
+        (
+            "- Checked diagnostic consumption format "
+            f"(legacy accepted field): `{handoff['accepted_sph_consumption_format']}`"
+        ),
         f"- MULTICOMPO NSPH block count: {handoff['multicompo_ascii_nsp_block_count']}",
         f"- MULTICOMPO ASCII: `{handoff['multicompo_ascii_path']}`",
         *_uncorrected_macrolib_lines(handoff),
@@ -751,6 +763,9 @@ def _quality_summary(
         and multicompo_nsp_block_count > 0
         and macrolib_nsp_block_count > 0
     )
+    # Kept as `production_ready` in schema v1 for compatibility.  For this
+    # diagnostic it means only structural completeness plus the historical
+    # statistical threshold; it is never physical-SPH acceptance.
     production_ready = structural_passed and max_flux_rel_std <= PRODUCTION_FLUX_REL_STD_DEV
     demonstration_quality = structural_passed and max_flux_rel_std <= DEMONSTRATION_FLUX_REL_STD_DEV
     if not structural_passed:
@@ -767,7 +782,8 @@ def _quality_summary(
         notes.append("SPH datasets or ASCII NSPH blocks are missing.")
     if max_flux_rel_std > PRODUCTION_FLUX_REL_STD_DEV:
         notes.append(
-            "Flux statistical uncertainty exceeds the production-quality "
+            "Flux statistical uncertainty exceeds the historical high-statistics "
+            "diagnostic "
             f"threshold {PRODUCTION_FLUX_REL_STD_DEV:g}."
         )
     if max_flux_rel_std > DEMONSTRATION_FLUX_REL_STD_DEV:
@@ -776,7 +792,10 @@ def _quality_summary(
             f"threshold {DEMONSTRATION_FLUX_REL_STD_DEV:g}; increase particles/batches."
         )
     if not notes:
-        notes.append("SPH handoff structure and flux uncertainty meet the production-quality threshold.")
+        notes.append(
+            "Diagnostic SPH handoff structure and flux uncertainty meet the "
+            "historical high-statistics threshold; this is not physical-SPH acceptance."
+        )
 
     return {
         "decision": decision,

@@ -50,6 +50,8 @@ echo "== Build next SPH table =="
   --reference-flux "$REFERENCE_FLUX" \
   --low-order-flux "$LOW_ORDER_FLUX::volume_flux" \
   --previous-sph "$PREVIOUS_SPH" \
+  --sph-target flux \
+  --flux-normalization none \
   --damping 1.0 \
   --clip-min 0.5 \
   --clip-max 2.0 \
@@ -69,7 +71,7 @@ echo "== Canonicalize next SPH table =="
   --force
 
 echo
-echo "== Inject and convert next SPH =="
+echo "== Augment and convert next SPH =="
 "$PYTHON_BIN" -m openmc2donjon.cli augment-sph "$MGXS" \
   --sph-source "$SPH_SIDECAR" \
   -o "$AUGMENTED_H5" \

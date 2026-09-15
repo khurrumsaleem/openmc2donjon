@@ -50,6 +50,13 @@ class InputReport:
     openmc_volume_flux_std_dev_worst: str | None = None
     h_factor_datasets: int = 0
     scatter_axes: list[str] = field(default_factory=list)
+    openmc_scatter_mgxs_type: str | None = None
+    openmc_scatter_multiplicity_weighted: bool | None = None
+    openmc_scatter_balance_dataset: str | None = None
+    openmc_scatter_contract_declared: bool | None = None
+    openmc_scatter_contract_valid: bool | None = None
+    openmc_transport_mgxs_type: str | None = None
+    openmc_transport_contract_declared: bool | None = None
     transport_total_datasets: int = 0
     transport_total_derivable: int = 0
     adf_mixtures: int = 0
@@ -206,6 +213,29 @@ def print_report(report: InputReport) -> None:
     )
     axes = ",".join(report.scatter_axes) if report.scatter_axes else "<inferred>"
     print(f"        scatter_axes={axes}")
+    scatter_status = (
+        "unresolved"
+        if report.openmc_scatter_contract_valid is None
+        else "invalid"
+        if report.openmc_scatter_contract_valid is False
+        else "declared"
+        if report.openmc_scatter_contract_declared is True
+        else "legacy-default"
+    )
+    scatter_weighted = (
+        "unknown"
+        if report.openmc_scatter_multiplicity_weighted is None
+        else str(report.openmc_scatter_multiplicity_weighted).lower()
+    )
+    print(
+        "        scatter_contract="
+        f"{scatter_status} type={report.openmc_scatter_mgxs_type or 'ordinary'} "
+        f"multiplicity_weighted={scatter_weighted} "
+        f"balance={report.openmc_scatter_balance_dataset or 'unknown'} "
+        f"transport={report.openmc_transport_mgxs_type or 'not-present'} "
+        "transport_declared="
+        f"{str(bool(report.openmc_transport_contract_declared)).lower()}"
+    )
     if report.scatter_row_balance_checked:
         if report.scatter_row_balance_max_rel is None:
             print("        scatter_row_balance=not evaluated")
@@ -296,6 +326,21 @@ def input_report_payload(report: InputReport) -> dict[str, object]:
         },
         "h_factor_datasets": report.h_factor_datasets,
         "scatter_axes": report.scatter_axes,
+        "openmc_scatter_mgxs_type": report.openmc_scatter_mgxs_type,
+        "openmc_scatter_multiplicity_weighted": (
+            report.openmc_scatter_multiplicity_weighted
+        ),
+        "openmc_scatter_balance_dataset": (
+            report.openmc_scatter_balance_dataset
+        ),
+        "openmc_scatter_contract_declared": (
+            report.openmc_scatter_contract_declared
+        ),
+        "openmc_scatter_contract_valid": report.openmc_scatter_contract_valid,
+        "openmc_transport_mgxs_type": report.openmc_transport_mgxs_type,
+        "openmc_transport_contract_declared": (
+            report.openmc_transport_contract_declared
+        ),
         "scatter_row_balance": {
             "checked": report.scatter_row_balance_checked,
             "warn_threshold": report.scatter_row_balance_warn_threshold,

@@ -101,6 +101,27 @@ transport/STRD readiness, domain-to-mixture mapping, volumes, and `domain_mode`.
 Strict dry-run returns non-zero if that checklist still has warnings or
 failures.
 
+Before running OpenMC, write the exact MGXS tallies declared by the recipe:
+
+```sh
+openmc2donjon-export --recipe export_recipe.py --write-tallies tallies.xml
+```
+
+The recipe need not be beside `main.py`, and `main.py` needs no
+openmc2donjon-specific code if it uses this `tallies.xml`. If it replaces
+`model.tallies` or exports XML again, integrate the same library tallies or
+change the order to `export model XML -> generate tallies.xml -> run OpenMC`.
+The recipe geometry/domain IDs must match the statepoint.
+
+Keep the static absorption/scattering/transport estimators paired. The ordinary
+policy uses `absorption` + `scatter matrix` + `transport`. For a fast-spectrum
+case where `(n,xn)` neutron multiplicity matters, also tally
+`reduced absorption`, explicitly select `consistent nu-scatter matrix`, and use
+`nu-transport` instead of ordinary `transport`, as documented in
+[OpenMC Export Workflow](OPENMC_EXPORT_WORKFLOW.md). No manual absorption or
+scatter-matrix edit is needed; the static handoff does not generate separate
+`N2N`/`N3N` depletion records.
+
 ```sh
 openmc2donjon-from-openmc \
   --recipe export_recipe.py \
@@ -183,20 +204,32 @@ volume flux and net current:
 bash examples/external_face_flux_adapter/run_smoke.sh
 ```
 
-For OpenMC-side SPH, export volume fluxes from the CE reference and MG macro
-OpenMC statepoints, compute the sidecar, then convert the augmented handoff:
+For standard physical SPH, keep a heterogeneous OpenMC CE model as the fixed
+fine reference and solve a homogenized OpenMC MG coarse model. The geometries
+are different, but the CE tally bins and MG transport groups, state, boundary
+conditions, and conservative fine-to-coarse comparison-domain map must agree.
+Their native OpenMC domain IDs need not be equal. Set `CE_DOMAIN_IDS` and
+`MG_DOMAIN_IDS` to the comma-separated native tally-bin IDs that correspond,
+in order, to the canonical `mixture_names` in `mgxs_library.h5`. Export aligned
+volume fluxes from both statepoints; the complete, non-overlapping map must
+preserve physical volume, integrated reference flux, and reaction rates.
+Also set `CE_FLUX_REL_SIGMA_LIMIT` and `MG_FLUX_REL_SIGMA_LIMIT` from the
+project's predeclared uncertainty budget; the product does not invent universal
+values. Compute the rate-preserving sidecar and iterate the OpenMC MG solve:
 
 ```sh
 openmc2donjon export-volume-flux ce_statepoint.h5 \
   --mgxs mgxs_library.h5 \
   --tally-name openmc_ce_volume_flux \
   --dataset-name openmc_volume_flux \
+  --source-domain-ids "${CE_DOMAIN_IDS}" \
   -o openmc_ce_flux.h5
 
 openmc2donjon export-volume-flux mg_statepoint.h5 \
   --mgxs mgxs_library.h5 \
   --tally-name openmc_mg_volume_flux \
   --dataset-name openmc_mg_flux \
+  --source-domain-ids "${MG_DOMAIN_IDS}" \
   -o openmc_mg_flux.h5
 
 openmc2donjon make-openmc-sph-sidecar mgxs_library.h5 \
@@ -204,16 +237,40 @@ openmc2donjon make-openmc-sph-sidecar mgxs_library.h5 \
   --reference-flux openmc_ce_flux.h5::openmc_volume_flux \
   --mg-flux openmc_mg_flux.h5::openmc_mg_flux \
   --table-output openmc_sph.csv \
+  --sph-target rate \
+  --flux-normalization power \
   --require-reference-flux-std-dev \
-  --max-reference-flux-std-dev-rel 0.05 \
+  --max-reference-flux-std-dev-rel "${CE_FLUX_REL_SIGMA_LIMIT}" \
   --require-mg-flux-std-dev \
-  --max-mg-flux-std-dev-rel 0.05
+  --max-mg-flux-std-dev-rel "${MG_FLUX_REL_SIGMA_LIMIT}"
+```
 
-openmc2donjon augment-sph mgxs_library.h5 \
+Apply `XS / NSPH` to the OpenMC-native `setN` library, rerun OpenMC MG, and
+recompute the sidecar with `--previous-sph` until converged:
+
+```sh
+openmc2donjon apply-sph mg_case/mgxs_unapplied.h5 \
+  --input-format openmc-mgxs \
   --sph-source openmc_sph_sidecar.h5 \
-  -o mgxs_with_openmc_sph.h5
+  -o mg_case/mgxs.h5
+```
 
-openmc2donjon mgxs_with_openmc_sph.h5 -o out.mcompo.txt --check --require-sph
+This OpenMC-native `setN` application is an iteration artifact, so it is
+recorded as `openmc-mgxs-intermediate-unbound`; it is not a Converter handoff
+and cannot pass `--require-physical-sph`. The final application below uses the
+exact Converter-layout HDF5 that the sidecar hash binds.
+
+Apply the converged factors to the Converter-facing HDF5, then use Converter as
+the mandatory formal handoff boundary. `apply-sph` records
+`sph_applied=true`:
+
+```sh
+openmc2donjon apply-sph mgxs_library.h5 \
+  --sph-source openmc_sph_sidecar.h5 \
+  -o mgxs_sph_applied.h5
+
+openmc2donjon mgxs_sph_applied.h5 -o out.mcompo.txt \
+  --production --require-physical-sph
 ```
 
 The small portable smoke for this route is:

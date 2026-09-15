@@ -28,10 +28,12 @@ export function WorkflowMap({ commands }: { commands: CommandCatalogEntry[] }) {
         ))}
       </div>
       <p className="mt-3 text-[12px] leading-5 text-[var(--fg-3)]">
-        For SPH, OpenMC CE is the high-fidelity reference. OpenMC MG is the
-        macro calculation on the selected energy mesh and the same
-        geometry/output regions. openmc2donjon carries the resulting NSPH
-        factors; it does not run a DONJON feedback loop.
+        For SPH, heterogeneous OpenMC CE is the high-fidelity fine reference and
+        homogenized OpenMC MG is the coarse calculation on a different geometry.
+        Score the CE tallies on the MG group boundaries; their state, boundary
+        conditions, and declared fine-to-coarse domain mapping must align.
+        openmc2donjon carries the resulting NSPH factors; it does not run a
+        DONJON feedback loop.
       </p>
     </section>
   );

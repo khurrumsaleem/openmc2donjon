@@ -233,7 +233,7 @@ function AsciiReaderGuide({
     },
     {
       label: "Payload",
-      body: "Look for NTOT0, absorption/fission vectors, chi, and NJJS/IJJS/SCAT sparse scattering.",
+      body: "Look for NTOT0, fission/chi vectors when present, and NJJS/IJJS/SCAT sparse scattering. Absorption/removal is implicit in NTOT0 minus the outgoing P0 scatter row.",
     },
     {
       label: "Equivalence",

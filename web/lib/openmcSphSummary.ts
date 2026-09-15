@@ -138,14 +138,20 @@ export function evidenceAuditPresentation(
     };
   }
 
+  const standardAppliedHandoff =
+    summary.sph_target === "rate" && summary.sph.applied_to_xs === true;
   return {
     label:
       audit.physics_acceptance === "failed"
-        ? "physics acceptance failed"
-        : "physics acceptance not evaluated",
+        ? "SPH handoff evidence failed"
+        : standardAppliedHandoff
+          ? "SPH-applied handoff evidence recorded"
+          : "diagnostic SPH evidence recorded",
     detail:
       audit.origin === "live_file"
-        ? "The summary and its declared handoff artifacts establish reproducible handoff evidence only; OpenMC-side NSPH is not native DRAGON/DONJON physics acceptance."
+        ? standardAppliedHandoff
+          ? "The rate-preserving OpenMC CE/MG route has reproducible upstream evidence and the correction is applied to the HDF5. Downstream DONJON, component, and full-core acceptance remain separate."
+          : "This summary does not establish a rate-preserving, SPH-applied Converter input. Keep it as diagnostic or iteration evidence until the standard physical contract passes."
         : "Fixture values are useful for UI and workflow review. They are not a substitute for preserved source artifacts and rerunnable calculations.",
     passed: false,
   };
@@ -205,12 +211,20 @@ export function summaryStatus(summary: OpenmcSphPhysicsSummary): {
   const hasNsp = summary.handoff.ascii_nsp_block_count > 0;
   const hasSph = summary.handoff.augmented_hdf5_has_sph;
   if (hasNsp && hasSph) {
+    if (summary.sph_target !== "rate") {
+      return {
+        label: "diagnostic flux-target NSPH",
+        tone: "warn",
+        detail:
+          "This summary uses the flux target, so it is handoff or iteration evidence only. It does not satisfy the standard rate-preserving physical-SPH contract.",
+      };
+    }
     if (summary.quality?.decision === "openmc_ce_mg_sph_statistical_review_required") {
       return {
         label: "statistics need review",
         tone: "warn",
         detail:
-          "SPH factors are present, but CE/MG flux uncertainty is above the demonstration threshold. Increase OpenMC particles/batches before treating this as production evidence.",
+          "SPH factors are present, but CE/MG flux uncertainty is above the diagnostic threshold. Increase OpenMC particles/batches before using this as quantitative SPH evidence.",
       };
     }
     if (summary.quality?.decision === "openmc_ce_mg_sph_demonstration_quality") {
@@ -218,7 +232,15 @@ export function summaryStatus(summary: OpenmcSphPhysicsSummary): {
         label: "demo-quality NSPH",
         tone: "warn",
         detail:
-          "SPH factors are present and the workflow is structurally complete, but flux uncertainty is above the production threshold.",
+          "SPH factors are present and the workflow is structurally complete, but flux uncertainty is above the recorded diagnostic threshold.",
+      };
+    }
+    if (summary.sph.applied_to_xs !== true) {
+      return {
+        label: "rate-SPH factors ready — apply before Converter",
+        tone: "warn",
+        detail:
+          "The rate-preserving factors are present, but the HDF5 cross sections are not marked SPH-applied. Run apply-sph and pass the corrected HDF5 through the physical contract before Converter.",
       };
     }
     const route =
@@ -226,9 +248,9 @@ export function summaryStatus(summary: OpenmcSphPhysicsSummary): {
         ? "MACROLIB NSPH"
         : "ASCII NSPH";
     return {
-      label: "SPH handoff present — validation required",
+      label: "SPH handoff present — downstream validation required",
       tone: "warn",
-      detail: `SPH factors are present in the augmented HDF5 and exported ${route}, but this OpenMC-side record is not a native DRAGON/DONJON physics acceptance.`,
+      detail: `Rate-preserving SPH is applied in the HDF5 and recorded in ${route}. The upstream handoff is Converter-ready; downstream DONJON and reactor-model acceptance remain separate.`,
     };
   }
   return {
@@ -284,7 +306,13 @@ export function openmcSphConvertHref(
   // Native DRAGON SPH happens after Converter. Sending the reference HDF5
   // back to Converter would reverse the physical workflow and discard the
   // corrected MACROLIB produced by SPH:.
-  if (isNativeDragonSphSummary(summary)) return null;
+  if (
+    isNativeDragonSphSummary(summary) ||
+    summary.sph_target !== "rate" ||
+    summary.sph.applied_to_xs !== true
+  ) {
+    return null;
+  }
   const input = summary.handoff.augmented_hdf5_path?.trim();
   const output = openmcSphOutputPath(summary)?.trim();
   if (!input || !output) return null;
@@ -292,6 +320,7 @@ export function openmcSphConvertHref(
   const format = openmcSphOutputFormat(summary);
   const params = new URLSearchParams({
     intent: "openmc-sph",
+    contract: "physical-sph",
     input,
     output,
     format,
@@ -299,7 +328,7 @@ export function openmcSphConvertHref(
     check: "1",
     production: "1",
     require_known_mesh: "0",
-    comment: "OpenMC-side SPH-augmented handoff",
+    comment: "OpenMC CE/MG SPH-corrected handoff",
   });
   return `/convert?${params.toString()}`;
 }

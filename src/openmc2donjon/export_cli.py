@@ -97,7 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "explicit OpenMC MGXS type to export as DONJON scattering. "
-            "Default accepts only ordinary 'scatter matrix'."
+            "Default accepts only ordinary 'scatter matrix'; an explicit "
+            "nu-scatter type also requires 'reduced absorption' and, when "
+            "TransportXS is used, the matching 'nu-transport'."
         ),
     )
     return parser
@@ -132,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
                 summary = export_openmc_tallies_recipe(
                     args.recipe,
                     args.write_tallies,
+                    scatter_mgxs_type=args.scatter_mgxs_type,
                     merge=not args.no_merge_tallies,
                     overwrite=not args.no_overwrite,
                 )

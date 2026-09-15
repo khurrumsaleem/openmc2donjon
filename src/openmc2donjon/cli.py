@@ -31,6 +31,7 @@ from .production_policy import (
     effective_production_thresholds,
     production_preflight_policy_payload,
 )
+from .scatter_contract import scatter_contract_from_preflight
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -205,9 +206,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-physical-sph",
         action="store_true",
         help=(
-            "require an already applied, rate-preserving OpenMC CE/MG SPH "
-            "fixed-point handoff on any declared domain mapping; rejects "
-            "empirical/global provenance"
+            "require an already applied, rate-preserving OpenMC CE-fine to "
+            "OpenMC-MG-coarse SPH fixed-point handoff on an explicit "
+            "comparison-domain mapping; rejects empirical/global provenance"
         ),
     )
     parser.add_argument(
@@ -269,8 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="REL",
         help=(
-            "with --check, warn if max |total - absorption - sum(P0 scatter out)| "
-            "/ |total| exceeds REL"
+            "with --check, warn if the maximum relative row residual for the "
+            "declared scatter/removal pair (absorption or reduced_absorption) "
+            "exceeds REL"
         ),
     )
     parser.add_argument(
@@ -279,8 +281,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="REL",
         help=(
-            "with --check, fail if max |total - absorption - sum(P0 scatter out)| "
-            "/ |total| exceeds REL"
+            "with --check, fail if the maximum relative row residual for the "
+            "declared scatter/removal pair (absorption or reduced_absorption) "
+            "exceeds REL"
         ),
     )
     parser.add_argument(
@@ -743,6 +746,7 @@ def _direct_convert_summary_payload(
         "output_size": output_size,
         "preflight_ok": preflight_ok,
         "preflight": preflight,
+        "scatter_contract": scatter_contract_from_preflight(preflight),
         "cli_command": command,
         "cli_command_text": " ".join(shlex.quote(part) for part in command),
     }

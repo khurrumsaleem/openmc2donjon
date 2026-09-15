@@ -70,7 +70,7 @@ GROUPS: tuple[CommandGroup, ...] = (
     CommandGroup(
         "sph",
         "Physical SPH equivalence",
-        "Validate native DRAGON SPH or use optional OpenMC MG-side factor tools.",
+        "Run rate-preserving OpenMC MG SPH or validate an advanced native DRAGON route.",
     ),
     CommandGroup(
         "project",
@@ -104,10 +104,13 @@ GROUP_GUIDANCE: dict[str, CommandGuidance] = {
     "openmc": CommandGuidance(
         use_when="Your starting point is an OpenMC recipe/statepoint rather than an existing handoff HDF5.",
         produces=(
-            "An MGXS HDF5 handoff, optional OpenMC-side equivalence sidecars, "
-            "ASCII output, and run bundle."
+            "An MGXS HDF5 handoff and, when the model requires it, the OpenMC "
+            "CE/MG equivalence inputs used before conversion."
         ),
-        next_step="Inspect the generated HDF5 and keep the managed run directory as the production record.",
+        next_step=(
+            "Inspect the generated HDF5; complete and apply any required "
+            "OpenMC CE/MG SPH correction before entering Converter."
+        ),
     ),
     "adf": CommandGuidance(
         use_when="You want one-shot discontinuity-factor equivalence from face-flux information.",
@@ -116,26 +119,31 @@ GROUP_GUIDANCE: dict[str, CommandGuidance] = {
     ),
     "sph": CommandGuidance(
         use_when=(
-            "Your fine OpenMC reference and declared DRAGON/DONJON coarse model "
-            "require a physical equivalence calculation."
+            "A detailed OpenMC CE reference and homogenized OpenMC MG coarse "
+            "model require physical equivalence before conversion."
         ),
-        produces="Native-SPH validation evidence or optional SPH sidecar artifacts.",
+        produces=(
+            "Rate-preserving OpenMC MG SPH factors, corrected MGXS HDF5, and "
+            "hashable convergence evidence."
+        ),
         next_step=(
-            "Use the accepted corrected MACROLIB in DONJON; keep component and full-core acceptance separate."
+            "Send the corrected HDF5 through Converter, then verify the checked "
+            "object in DRAGON/DONJON; native DRAGON SPH remains an advanced "
+            "project-specific alternative."
         ),
     ),
     "project": CommandGuidance(
         use_when=(
-            "Your required components have independent accepted native-SPH evidence "
-            "and are ready to enter a batch, lattice, or full-core model."
+            "You need to coordinate repeated, multi-component, state-dependent, "
+            "or full-core handoffs under one explicit manifest."
         ),
         produces=(
-            "A hash-linked component MACROLIB or an explicit position-expanded "
-            "MACROLIB that preserves the accepted component records exactly."
+            "Manifest-tracked inputs, Converter outputs and receipts, optional "
+            "physics evidence, and a declared downstream consumer."
         ),
         next_step=(
-            "Run the declared downstream SN/SPN model and apply its independent "
-            "k-effective, leakage, and power-shape acceptance criteria."
+            "Finish every required handoff, then run the declared consumer and "
+            "apply that model's independent acceptance criteria."
         ),
     ),
     "package": CommandGuidance(
@@ -406,8 +414,9 @@ DETAILS: dict[str, CommandDetail] = {
         ),
         tags=("SPH", "OpenMC"),
         use_when=(
-            "You have OpenMC CE and OpenMC MG fluxes from the same geometry "
-            "and want explicit SPH factors per output region and group."
+            "You have fluxes from a detailed OpenMC CE reference and an "
+            "OpenMC MG homogenized coarse model, mapped to the same declared "
+            "comparison domains and energy groups."
         ),
         produces="A command that writes an SPH CSV table and sidecar HDF5 when run locally.",
         next_step=(
@@ -454,8 +463,8 @@ DETAILS: dict[str, CommandDetail] = {
         ),
         next_step=(
             "Rerun OpenMC MG with the corrected XS, export the new MG flux, "
-            "and repeat until the OpenMC-side SPH factors stabilize; inject "
-            "the final sidecar before DONJON conversion."
+            "and repeat the rate-preserving update until the factors stabilize; "
+            "apply the final factors to the HDF5 before Converter."
         ),
     ),
     "validate-native-sph": CommandDetail(

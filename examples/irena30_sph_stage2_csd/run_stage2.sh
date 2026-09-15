@@ -77,8 +77,12 @@ OPENMC2DONJON_IRENA_SPH2_DIR="$CE_CASE_DIR" \
   -o "$MGXS_H5"
 
 echo
-echo "== Fill zero-flux thermal groups of the handoff from the MG macrolib =="
+echo "== Fill zero-flux thermal groups from a contract-matched MG macrolib =="
 IRENA30_MACROLIB="${IRENA30_MACROLIB:-/Users/wen/openmc-workspace/irena/build/macrolib.h5}"
+# The exported handoff uses consistent nu-scatter. fill-zero-flux therefore
+# requires both the matching explicit source contract and multiplicity_matrix
+# evidence, rejecting the historical macrolib instead of silently substituting
+# the wrong scattering convention or an already-reduced absorption vector.
 "$PYTHON_BIN" -m openmc2donjon.cli fill-zero-flux "$MGXS_H5" \
   --macrolib "$IRENA30_MACROLIB" \
   --in-place

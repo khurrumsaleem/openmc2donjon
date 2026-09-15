@@ -26,6 +26,7 @@ from ..production_policy import (
     effective_production_thresholds,
     production_preflight_policy_payload,
 )
+from ..scatter_contract import scatter_contract_from_preflight
 from .files import _mock_file_status, record_mock_written_file
 from .filesystem import FilesystemScope
 from .text_preview import _is_mock_openmc_sph_path, _mock_ascii_preview_text
@@ -606,6 +607,7 @@ def _convert_response(
         "output_size": output_size,
         "preflight_ok": preflight_ok,
         "preflight": preflight,
+        "scatter_contract": scatter_contract_from_preflight(preflight),
         "cli_command": command,
         "cli_command_text": " ".join(shlex.quote(part) for part in command),
     }
@@ -808,6 +810,13 @@ def _mock_preflight_input(path: str) -> dict[str, Any]:
         "adf_mixtures": 9,
         "adf_faces": ["XMIN", "XMAX", "YMIN", "YMAX"],
         "sph_calculations": 9,
+        "openmc_scatter_mgxs_type": "scatter matrix",
+        "openmc_scatter_multiplicity_weighted": False,
+        "openmc_scatter_balance_dataset": "absorption",
+        "openmc_scatter_contract_declared": True,
+        "openmc_scatter_contract_valid": True,
+        "openmc_transport_mgxs_type": "transport",
+        "openmc_transport_contract_declared": True,
         "scatter_row_balance": {
             "checked": True,
             "max_rel": 2.1e-3,
@@ -850,6 +859,13 @@ def _mock_openmc_sph_preflight_input(path: str) -> dict[str, Any]:
         "adf_mixtures": 0,
         "adf_faces": [],
         "sph_calculations": 2,
+        "openmc_scatter_mgxs_type": "scatter matrix",
+        "openmc_scatter_multiplicity_weighted": False,
+        "openmc_scatter_balance_dataset": "absorption",
+        "openmc_scatter_contract_declared": True,
+        "openmc_scatter_contract_valid": True,
+        "openmc_transport_mgxs_type": "transport",
+        "openmc_transport_contract_declared": True,
         "scatter_row_balance": {
             "checked": True,
             "max_rel": 1.8e-3,

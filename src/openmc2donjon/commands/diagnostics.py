@@ -406,8 +406,8 @@ def build_check_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="REL",
         help=(
-            "warn if max |total - absorption - sum(P0 scatter out)| / |total| "
-            "exceeds REL"
+            "warn if the maximum relative row residual for the declared "
+            "scatter/removal pair (absorption or reduced_absorption) exceeds REL"
         ),
     )
     parser.add_argument(
@@ -416,8 +416,8 @@ def build_check_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="REL",
         help=(
-            "fail if max |total - absorption - sum(P0 scatter out)| / |total| "
-            "exceeds REL"
+            "fail if the maximum relative row residual for the declared "
+            "scatter/removal pair (absorption or reduced_absorption) exceeds REL"
         ),
     )
     parser.add_argument(

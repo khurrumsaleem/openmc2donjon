@@ -64,12 +64,14 @@ describe("commandBuilder", () => {
     values.mgxs = "/runs/case/mgxs_library.h5";
     values.tally_name = "openmc_mg_volume_flux";
     values.dataset_name = "openmc_mg_flux";
+    values.source_domain_ids = "91,17";
     values.summary_json = "/runs/case/openmc_mg_flux_summary.json";
 
     expect(buildCommandCli(spec!, values)).toBe(
       "openmc2donjon export-volume-flux /runs/case/mg_statepoint.h5 " +
         "-o /runs/case/openmc_mg_flux.h5 --mgxs /runs/case/mgxs_library.h5 " +
         "--tally-name openmc_mg_volume_flux --dataset-name openmc_mg_flux " +
+        "--source-domain-ids 91,17 " +
         "--summary-json /runs/case/openmc_mg_flux_summary.json",
     );
 
@@ -79,8 +81,19 @@ describe("commandBuilder", () => {
       "openmc2donjon export-volume-flux /runs/case/mg_statepoint.h5 " +
         "-o /runs/case/openmc_mg_flux.h5 --mgxs /runs/case/mgxs_library.h5 " +
         "--tally-name openmc_mg_volume_flux --dataset-name openmc_mg_flux " +
+        "--source-domain-ids 91,17 " +
         "--allow-zero-flux " +
         "--summary-json /runs/case/openmc_mg_flux_summary.json",
+    );
+
+    const sourceIds = spec!.fields.find(
+      (field) => field.name === "source_domain_ids",
+    );
+    expect(sourceIds?.required).not.toBe(true);
+    expect(sourceIds?.help).toContain("canonical --mgxs mixture_names order");
+    expect(sourceIds?.help).toContain("CE and MG geometries may use different");
+    expect(sourceIds?.help).toContain(
+      "derived from --mgxs source_domain_id metadata",
     );
   });
 
@@ -101,6 +114,60 @@ describe("commandBuilder", () => {
         "-o /runs/case/mg_case/mgxs.h5 " +
         "--summary-json /runs/case/sph_apply_summary.json --force",
     );
+  });
+
+  it("defaults the SPH update table to production rate preservation", () => {
+    const spec = commandBuilderSpec("make-sph-update-table");
+    expect(spec).not.toBeNull();
+    const values = defaultBuilderValues(spec!);
+
+    expect(values.flux_normalization).toBe("auto");
+    expect(values.sph_target).toBe("rate");
+    expect(values.max_reference_flux_std_dev_rel).toBe("");
+    expect(values.max_mg_flux_std_dev_rel).toBe("");
+    expect(buildCommandCli(spec!, values)).toContain(
+      "--flux-normalization auto --sph-target rate",
+    );
+    expect(buildCommandCli(spec!, values)).toContain(
+      "--require-reference-flux-std-dev --max-reference-flux-std-dev-rel <CE_MAX_REL_STD_DEV>",
+    );
+    expect(buildCommandCli(spec!, values)).toContain(
+      "--require-mg-flux-std-dev --max-mg-flux-std-dev-rel <MG_MAX_REL_STD_DEV>",
+    );
+    expect(builderCliIssues(spec!, values)).toEqual([
+      "Physical route HOLD: CE max relative std dev is required when sph_target=rate.",
+      "Physical route HOLD: MG max relative std dev is required when sph_target=rate.",
+    ]);
+
+    values.max_reference_flux_std_dev_rel = "0.025";
+    values.max_mg_flux_std_dev_rel = "0.04";
+    expect(buildCommandCli(spec!, values)).toContain(
+      "--require-reference-flux-std-dev --max-reference-flux-std-dev-rel 0.025",
+    );
+    expect(buildCommandCli(spec!, values)).toContain(
+      "--require-mg-flux-std-dev --max-mg-flux-std-dev-rel 0.04",
+    );
+    expect(builderCliIssues(spec!, values)).toEqual([]);
+
+    values.flux_normalization = "none";
+    values.sph_target = "flux";
+    values.max_reference_flux_std_dev_rel = "";
+    values.max_mg_flux_std_dev_rel = "";
+    expect(buildCommandCli(spec!, values)).toContain(
+      "--flux-normalization none --sph-target flux",
+    );
+    expect(buildCommandCli(spec!, values)).not.toContain(
+      "--require-reference-flux-std-dev",
+    );
+    expect(buildCommandCli(spec!, values)).not.toContain(
+      "--require-mg-flux-std-dev",
+    );
+    expect(builderCliIssues(spec!, values)).toEqual([]);
+
+    values.max_reference_flux_std_dev_rel = "-0.01";
+    expect(builderCliIssues(spec!, values)).toEqual([
+      "CE max relative std dev must be a finite non-negative number.",
+    ]);
   });
 
   it("builds the native DRAGON SPH physics validation command", () => {
@@ -129,7 +196,7 @@ describe("commandBuilder", () => {
         "--summary-json /runs/case/physics_summary.json",
     );
     expect(commandBuilderStage("validate-native-sph").label).toBe(
-      "Native DRAGON SPH",
+      "Advanced · native DRAGON SPH",
     );
   });
 
@@ -173,12 +240,15 @@ describe("commandBuilder", () => {
     );
   });
 
-  it("labels SPH builders with the OpenMC-side equivalence stage", () => {
+  it("labels SPH builders with the recommended CE/MG equivalence stage", () => {
     const stage = commandBuilderStage("export-volume-flux");
 
-    expect(stage.label).toBe("OpenMC-side SPH");
-    expect(stage.summary).toContain("CE reference");
-    expect(stage.reference).toContain("OpenMC MG");
+    expect(stage.label).toBe("Recommended OpenMC CE/MG SPH");
+    expect(stage.summary).toContain("heterogeneous CE fine reference");
+    expect(stage.summary).toContain("MG coarse model");
+    expect(stage.reference).toContain("Different CE/MG geometries");
+    expect(stage.reference).toContain("CE tallies use MG group boundaries");
+    expect(stage.reference).toContain("state/BC/domain mapping");
   });
 
   it("emits the equals form for values that begin with a dash", () => {

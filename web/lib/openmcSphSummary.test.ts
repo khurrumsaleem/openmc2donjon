@@ -308,10 +308,24 @@ describe("openmcSphSummary", () => {
     );
   });
 
-  it("keeps an OpenMC-side NSPH handoff distinct from physics acceptance", () => {
+  it("keeps a diagnostic flux-target handoff out of the physical route", () => {
     expect(summaryStatus(SUMMARY)).toMatchObject({
       tone: "warn",
-      label: "SPH handoff present — validation required",
+      label: "diagnostic flux-target NSPH",
+    });
+  });
+
+  it("keeps an applied rate-preserving CE/MG handoff distinct from downstream acceptance", () => {
+    expect(summaryStatus({
+      ...SUMMARY,
+      sph_target: "rate",
+      sph: {
+        ...SUMMARY.sph,
+        applied_to_xs: true,
+      },
+    })).toMatchObject({
+      tone: "warn",
+      label: "SPH handoff present — downstream validation required",
     });
   });
 
@@ -319,6 +333,7 @@ describe("openmcSphSummary", () => {
     expect(
       summaryStatus({
         ...SUMMARY,
+        sph_target: "rate",
         quality: {
           ...SUMMARY.quality!,
           decision: "openmc_ce_mg_sph_demonstration_quality",
@@ -336,6 +351,7 @@ describe("openmcSphSummary", () => {
     expect(
       summaryStatus({
         ...SUMMARY,
+        sph_target: "rate",
         quality: {
           ...SUMMARY.quality!,
           decision: "openmc_ce_mg_sph_statistical_review_required",
@@ -466,7 +482,7 @@ describe("openmcSphSummary", () => {
     expect(rows[1].maxResidual).toBe(5.0e-12);
   });
 
-  it("builds production evidence rows from the physics summary", () => {
+  it("builds SPH evidence rows from the physics summary", () => {
     const rows = productionEvidenceRows(SUMMARY);
 
     expect(rows.map((row) => row.id)).toEqual([
@@ -499,29 +515,42 @@ describe("openmcSphSummary", () => {
     expect(rows[5].detail).toContain("CE flux-shape residual mean 0.05152");
   });
 
-  it("builds a converter deep link for the SPH-augmented handoff", () => {
-    const href = openmcSphConvertHref(SUMMARY);
+  it("builds a converter deep link only for the corrected SPH-applied handoff", () => {
+    const href = openmcSphConvertHref({
+      ...SUMMARY,
+      sph_target: "rate",
+      sph: { ...SUMMARY.sph, applied_to_xs: true },
+    });
 
     expect(href).not.toBeNull();
     const url = new URL(href!, "http://localhost:3000");
     expect(url.pathname).toBe("/convert");
     expect(url.searchParams.get("intent")).toBe("openmc-sph");
+    expect(url.searchParams.get("contract")).toBe("physical-sph");
     expect(url.searchParams.get("input")).toBe("/mock/mgxs_with_sph.h5");
     expect(url.searchParams.get("output")).toBe("/mock/out.macrolib.txt");
     expect(url.searchParams.get("format")).toBe("macrolib");
     expect(url.searchParams.get("writer_backend")).toBe("ascii");
     expect(url.searchParams.get("check")).toBe("1");
     expect(url.searchParams.get("production")).toBe("1");
-    // Terminology: the augmented file is "SPH-augmented", never "corrected".
     expect(url.searchParams.get("comment")).toBe(
-      "OpenMC-side SPH-augmented handoff",
+      "OpenMC CE/MG SPH-corrected handoff",
     );
   });
 
-  it("does not build a converter deep link without augmented handoff paths", () => {
+  it("does not build a converter deep link before apply-sph or without its output path", () => {
+    expect(openmcSphConvertHref(SUMMARY)).toBeNull();
     expect(
       openmcSphConvertHref({
         ...SUMMARY,
+        sph: { ...SUMMARY.sph, applied_to_xs: true },
+      }),
+    ).toBeNull();
+    expect(
+      openmcSphConvertHref({
+        ...SUMMARY,
+        sph_target: "rate",
+        sph: { ...SUMMARY.sph, applied_to_xs: true },
         handoff: {
           ...SUMMARY.handoff,
           augmented_hdf5_path: null,
@@ -531,6 +560,8 @@ describe("openmcSphSummary", () => {
     expect(
       openmcSphConvertHref({
         ...SUMMARY,
+        sph_target: "rate",
+        sph: { ...SUMMARY.sph, applied_to_xs: true },
         handoff: {
           ...SUMMARY.handoff,
           ascii_path: null,

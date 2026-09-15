@@ -72,9 +72,12 @@ H_FACTOR_DATASETS = (
 )
 OPTIONAL_VECTOR_DATASETS = (
     "transport_total",
+    "reduced_absorption",
     *INVERSE_VELOCITY_DATASETS,
     *H_FACTOR_DATASETS,
 )
+
+
 def production_preflight_defaults(
     *,
     production: bool,
@@ -474,8 +477,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="REL",
         help=(
-            "warn if max |total - absorption - sum(P0 scatter out)| / |total| "
-            "exceeds REL"
+            "warn if the maximum relative row residual for the declared "
+            "scatter/removal pair (absorption or reduced_absorption) exceeds REL"
         ),
     )
     parser.add_argument(
@@ -484,8 +487,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="REL",
         help=(
-            "fail if max |total - absorption - sum(P0 scatter out)| / |total| "
-            "exceeds REL"
+            "fail if the maximum relative row residual for the declared "
+            "scatter/removal pair (absorption or reduced_absorption) exceeds REL"
         ),
     )
     parser.add_argument(
@@ -862,6 +865,21 @@ def apply_shared_physics_checks(
     report.scatter_row_balance_max_rel = physics.scatter_row_balance_max_rel
     report.scatter_row_balance_max_abs = physics.scatter_row_balance_max_abs
     report.scatter_row_balance_worst = physics.scatter_row_balance_worst
+    report.openmc_scatter_mgxs_type = physics.openmc_scatter_mgxs_type
+    report.openmc_scatter_multiplicity_weighted = (
+        physics.openmc_scatter_multiplicity_weighted
+    )
+    report.openmc_scatter_balance_dataset = (
+        physics.openmc_scatter_balance_dataset
+    )
+    report.openmc_scatter_contract_declared = (
+        physics.openmc_scatter_contract_declared
+    )
+    report.openmc_scatter_contract_valid = physics.openmc_scatter_contract_valid
+    report.openmc_transport_mgxs_type = physics.openmc_transport_mgxs_type
+    report.openmc_transport_contract_declared = (
+        physics.openmc_transport_contract_declared
+    )
     for warning in physics.scatter_row_balance_warnings:
         report.warn(warning)
     for issue in physics.scatter_row_balance_errors:

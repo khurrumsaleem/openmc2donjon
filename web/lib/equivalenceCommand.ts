@@ -36,6 +36,8 @@ export interface EquivalenceCommandOptions {
   damping: string;
   fluxNormalization: "none" | "total" | "power" | "auto";
   sphTarget: "flux" | "rate";
+  maxReferenceFluxStdDevRel: string;
+  maxMgFluxStdDevRel: string;
   zeroFluxPolicy: "reject" | "identity";
   fluxFloorRel: string;
   freezeGroups: string;
@@ -57,10 +59,10 @@ export const EQUIVALENCE_KINDS: readonly EquivalenceKindInfo[] = [
   {
     kind: "openmc-sph-sidecar",
     commandId: "make-openmc-sph-sidecar",
-    label: "OpenMC MG cross-check",
-    title: "Build an optional OpenMC MG-side SPH update",
+    label: "Recommended OpenMC CE/MG SPH",
+    title: "Build the rate-preserving OpenMC CE/MG SPH update",
     summary:
-      "Optional alternate method: compute an auditable rate-preserving update from matched fine-reference CE and OpenMC MG domain fluxes, then rerun the MG model until converged.",
+      "Recommended equivalence route: compare a heterogeneous fine CE reference with a homogenized coarse MG model, compute an auditable rate-preserving update, then rerun MG until converged.",
     outputPlaceholder: "openmc_sph.h5",
   },
   {
@@ -155,6 +157,8 @@ export function defaultEquivalenceOptions(kind: EquivalenceKind): EquivalenceCom
     damping: "1.0",
     fluxNormalization: "auto",
     sphTarget: "rate",
+    maxReferenceFluxStdDevRel: "",
+    maxMgFluxStdDevRel: "",
     zeroFluxPolicy: "reject",
     fluxFloorRel: "",
     freezeGroups: "",
@@ -249,9 +253,15 @@ function buildOpenmcSphSidecarCli(options: EquivalenceCommandOptions): string {
   pushOptional(command, "--previous-sph", options.previousSph);
   pushOptional(command, "--damping", options.damping);
   pushOptional(command, "--flux-normalization", options.fluxNormalization);
-  if (options.sphTarget !== "flux") {
+  if (options.sphTarget !== "rate") {
     command.push("--sph-target", options.sphTarget);
   }
+  pushOpenmcSphUncertaintyGate(
+    command,
+    options.sphTarget,
+    options.maxReferenceFluxStdDevRel,
+    options.maxMgFluxStdDevRel,
+  );
   if (options.zeroFluxPolicy !== "reject") {
     command.push("--zero-flux-policy", options.zeroFluxPolicy);
   }
@@ -261,6 +271,31 @@ function buildOpenmcSphSidecarCli(options: EquivalenceCommandOptions): string {
   pushOptional(command, "--clip-max", options.clipMax);
   pushCommon(command, options);
   return command.map(shellQuote).join(" ");
+}
+
+function pushOpenmcSphUncertaintyGate(
+  command: string[],
+  sphTarget: "flux" | "rate",
+  maxReferenceFluxStdDevRel: string,
+  maxMgFluxStdDevRel: string,
+): void {
+  const production = sphTarget === "rate";
+  const referenceThreshold = maxReferenceFluxStdDevRel.trim();
+  const mgThreshold = maxMgFluxStdDevRel.trim();
+  if (production || referenceThreshold !== "") {
+    command.push(
+      "--require-reference-flux-std-dev",
+      "--max-reference-flux-std-dev-rel",
+      referenceThreshold || "<CE_MAX_REL_STD_DEV>",
+    );
+  }
+  if (production || mgThreshold !== "") {
+    command.push(
+      "--require-mg-flux-std-dev",
+      "--max-mg-flux-std-dev-rel",
+      mgThreshold || "<MG_MAX_REL_STD_DEV>",
+    );
+  }
 }
 
 function buildAugmentSphCli(options: EquivalenceCommandOptions): string {

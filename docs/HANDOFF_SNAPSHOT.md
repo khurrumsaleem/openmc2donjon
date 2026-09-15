@@ -1,6 +1,6 @@
 # Handoff Snapshot
 
-Last updated: 2026-07-16
+Last updated: 2026-07-24
 
 > This snapshot covers the general converter package as well as historical
 > validation lines. For the current IRENA product contract and its stricter
@@ -38,7 +38,7 @@ remain separate mixtures when their spectra or leakage environments differ.
 - ADF/DF sidecar injection, OpenMC surface-flux export, low-order driver
   canonicalization, face-flux contract checks, and flux-ratio ADF workflow
   plumbing.
-- SPH sidecar injection and DONJON `NSPH` carry-through for routes where the
+- SPH sidecar augmentation and DONJON `NSPH` carry-through for routes where the
   downstream solver uses SPH equivalence factors instead of ADF/DF, including
   extraction from DONJON/DRAGON `L_MACROLIB` ASCII dumps.
 - OpenMC-side CE/MG SPH iteration with a rate-preserving target. The package
@@ -64,14 +64,19 @@ checked by the baseline manifest validation. This proves that conversion and
 the particular 91-position model are numerically reproducible; it does not
 prove the product's five-colorset SPH model. The 91 positions are not all fuel.
 
-**Current IRENA CE/SPH candidate:** all 91 heterogeneous fine assemblies with
-real radial vacuum, tallied as either 91 independent domains or 21 exact global
-D3 symmetry orbits pooled during OpenMC transport -> Converter reference
-MACROLIB -> native DRAGON full-core SPH -> DONJON. This route is implemented
-structurally but does not yet claim an accepted physics result. Acceptance
-requires one hash-linked run to pass k-effective, leakage, 91-position power,
-Monte Carlo quality, SPH fixed-point, every one-speed solve, and final
-transport convergence. It uses no ADF or empirical/global factor.
+**IRENA CE/SPH status:** there is no accepted full-core SPH result. A standard
+candidate must keep all 91 heterogeneous fine assemblies with real radial
+vacuum, tally either 91 independent domains or 21 exact global D3 pools,
+map them conservatively to a homogenized OpenMC MG coarse geometry, converge
+the rate-preserving update, pass the corrected HDF5 through Converter, and then
+verify it in DONJON. Acceptance requires one hash-linked run to pass
+k-effective, leakage, 91-position power, Monte Carlo quality, SPH fixed-point,
+and downstream transport-convergence gates. It permits no ADF or
+empirical/global factor.
+
+The native DRAGON full-core decks and validators remain an advanced external
+project route. They are structural/research evidence only and do not supersede
+the standard OpenMC MG operator or establish IRENA acceptance.
 
 **Cartesian line — C5G7 assembly-wise homogenization:**
 
@@ -152,21 +157,27 @@ All passed.
   physics acceptance.
 - DRAGON/DONJON equivalence effects such as `SPH` or `LEAK B2` are not
   inferred from plain OpenMC MGXS handoffs. Explicit SPH vectors can now be
-  carried through as `NSPH`; physical SPH generation still belongs to the
-  matching deterministic/equivalence workflow.
-- The accepted C5G7 statepoint/exporter parity path is locked to the OpenMC
-  `consistent nu-scatter matrix` tally definition that produced the baseline.
-  New user recipes should still use ordinary `scatter matrix` unless they
-  explicitly want a non-default scattering definition.
+  carried through as `NSPH`; standard physical SPH generation belongs to the
+  matched OpenMC CE-fine/OpenMC-MG-coarse rate-preserving workflow, followed by
+  `apply-sph` and Converter.
+- The accepted C5G7 HDF5 declares ordinary `consistent scatter matrix` paired
+  with `absorption`; the saved source statepoint's ordinary and nu-weighted P0
+  tallies were identical in all 441 bins. The saved statepoint predates the
+  current transport-complete recipe and is not a directly replayable exporter
+  input. Regenerate OpenMC tallies and the statepoint before making a new parity
+  claim; do not reconstruct `TransportXS` from a bare P1 row sum.
 
 ## Next Physical Work
 
 1. Run the heterogeneous 91-position OpenMC CE fine model with either 91
-   independent domains or 21 exact global D3 orbits pooled during transport.
-2. Pass that declared full-core HDF5 through Converter and preserve the
-   hash-linked reference MACROLIB receipt.
-3. Run native DRAGON SPH on the matching 91-position coarse geometry with the
-   project-declared SN or SPN method, then verify the corrected object in DONJON.
-4. Promote the line only after one hash-linked run passes native/final solver
-   convergence, finite-domain k-effective and leakage, 91-position power,
-   statistical-quality, and provenance gates without fitting any observable.
+   independent domains or proved exact global D3 pools.
+2. Map those fine domains conservatively onto the homogenized OpenMC MG coarse
+   model while preserving groups, state, boundary conditions, volume, and
+   integrated comparison rates.
+3. Iterate the rate-preserving SPH update in OpenMC MG to convergence, apply
+   the final factors to the Converter-facing HDF5, and preserve the Converter
+   output and receipt.
+4. Verify the converted object in DONJON and promote the line only after one
+   hash-linked run passes fixed-point/final-solver convergence, finite-domain
+   k-effective and leakage, 91-position power, statistical-quality, and
+   provenance gates without fitting any observable.

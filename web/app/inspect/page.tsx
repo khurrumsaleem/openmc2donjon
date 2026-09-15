@@ -606,6 +606,15 @@ function auxiliaryGroupSeries(detail: MixtureDetail): GroupVectorSeries[] {
   const uncertainty = detail.cross_section_std_dev;
   return [
     {
+      key: "reduced_absorption",
+      label: "Reduced / net absorption",
+      description:
+        "Removal term paired with a multiplicity-weighted OpenMC nu-scatter matrix for the DRAGON NTOT0 − ΣSCAT(P0) balance. It may legitimately be negative in fast groups.",
+      units: "cm⁻¹ when the source MGXS is macroscopic",
+      values: xs.reduced_absorption,
+      standardDeviations: uncertainty.reduced_absorption,
+    },
+    {
       key: "kappa_fission",
       label: "H-FACTOR / κΣf",
       description:

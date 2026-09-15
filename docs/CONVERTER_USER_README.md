@@ -41,7 +41,7 @@ You do **not** need to visit every page.
 | Projects | You want to coordinate repeated or multi-component Converter runs. | No |
 | Builder | You want to assemble and copy an advanced CLI command; the page does not execute it. | No |
 | DONJON | You want a starter DONJON deck and `NCR`/`MACROLIB` loading hints. | Recommended |
-| SPH | After Converter, your declared coarse model needs physical equivalence. | No |
+| SPH | Before final conversion, your homogenized OpenMC MG model needs a rate-preserving SPH correction and corrected HDF5. | No |
 | PyGan | You want optional writer diagnostics and ASCII-vs-PyGan semantic validation. | No |
 | Commands | You want command reference and deep links. | No |
 
@@ -165,46 +165,52 @@ Use it when the next DONJON step expects a macrolib directly.
 
 Current physical SPH handoff status:
 
-- Converter first writes the uncorrected reference `L_MACROLIB` and its
-  hash-linked receipt from the model-declared HDF5;
-- native DRAGON `SPH:` solves the project-declared coarse geometry with SN or
-  SPN and writes the corrected `NSPH` MACROLIB;
-- `validate-native-sph` binds the OpenMC reference, Converter receipt, native
-  solver listing, corrected object, and DONJON verification evidence;
-- choose `L_MULTICOMPO` or `L_MACROLIB` according to the downstream model, not
-  because SPH imposes one universal object type.
+- the standard operator compares a fixed heterogeneous OpenMC CE fine reference
+  with a homogenized OpenMC MG coarse calculation;
+- `make-openmc-sph-sidecar --sph-target rate` forms the rate-preserving update,
+  and `apply-sph --input-format openmc-mgxs` writes `XS / NSPH` for the next MG
+  iteration;
+- after convergence, `apply-sph` writes the corrected Converter-facing HDF5;
+- Converter then performs the mandatory production preflight, writes
+  `L_MULTICOMPO` or `L_MACROLIB`, and records the hash-linked receipt;
+- choose the output object according to the downstream model, not because SPH
+  imposes one universal object type.
 
 ## Physical SPH: When To Care
 
 Start with direct conversion first.
 
 Use `/equivalence` only when the homogenized model requires physical SPH. The
-primary route is fine OpenMC reference -> Converter reference MACROLIB ->
-native DRAGON SPH on the matching coarse geometry -> DONJON verification.
-Whether a single assembly needs SPH is a model decision, not a geometry rule;
-the fine and coarse domains, boundaries, group structure, and observable must
-describe the same declared problem.
+standard route is heterogeneous OpenMC CE fine reference -> homogenized OpenMC
+MG coarse solve -> converged rate-preserving SPH -> Converter -> DONJON
+verification. Whether a single assembly needs SPH is a model decision, not a
+geometry rule.
 
-OpenMC CE/MG `make-openmc-sph-sidecar` + `apply-sph` remains an optional
-alternate or cross-check. When a project explicitly chooses it, the OpenMC MG
-macro calculation uses the same geometry and output regions as the CE
-reference, may use Hn histogram angular representation internally, and must
-iterate the rate-preserving update to convergence before Converter. That route
-does not make OpenMC MG the universal production operator, and it cannot replace
-a project-required native DRAGON/DONJON coarse solve.
+The fine and coarse geometries must not be described as identical. The CE model
+resolves the heterogeneous problem; the MG model replaces each declared
+comparison domain with its homogenized region. They must retain the same energy
+groups, physical state and boundary conditions, and a conservative mapping
+under which each coarse domain covers the same physical volume and receives
+the integrated fine-reference flux and rates assigned to it.
 
-For that optional OpenMC MG route, the CE run may tally both representations:
+The CE run may tally both representations:
 
 ```text
 P3 Legendre MGXS   -> DONJON handoff
 Hn histogram MGXS  -> OpenMC MG macro solve -> SPH factor generation
 ```
 
-There is no Hn-to-Legendre conversion step in the optional route. The Hn data
-improves only the OpenMC MG flux used to compute its alternate SPH factors;
-DONJON receives directly tallied Pn/Legendre MGXS with the converged correction
-already folded into the handoff cross sections. This alternate path does not
-change the primary native-DRAGON product route.
+There is no Hn-to-Legendre conversion step in the standard route. The Hn data
+improves only the OpenMC MG flux used to compute the SPH factors; DONJON
+receives directly tallied Pn/Legendre MGXS with the converged correction already
+folded into the handoff cross sections.
+
+An advanced project may instead declare a native DRAGON `SPH:` coarse solver.
+Converter must first write and receipt its uncorrected reference
+`L_MACROLIB`; the external DRAGON installation then owns the iteration, and
+`validate-native-sph` binds the deck, listing, corrected object, and DONJON
+verification evidence. This external-solver route is project-specific and does
+not redefine the standard OpenMC MG operator.
 
 ## Hexagonal Cases
 
@@ -221,8 +227,9 @@ domain style handoffs. The validation status is:
 - C5G7 assembly-wise is the accepted OpenMC -> DONJON k-effective validation.
 - The IRENA-30 ZREFL 91-position OpenMC-MG -> Converter -> DONJON SN8 line is
   an accepted downstream mapping and transport-mechanics baseline.
-- That multigroup baseline is not an accepted continuous-energy fine -> native
-  DRAGON SPH -> full-core physics result; the strict candidate remains on HOLD.
+- That multigroup baseline is not an accepted continuous-energy fine ->
+  OpenMC-MG rate-SPH -> full-core physics result; every IRENA SPH candidate
+  remains on HOLD.
 
 ## OpenMC Branch Used For Hex Work
 

@@ -9,7 +9,7 @@ Monte Carlo tallies are exact.
 
 | Gate | Default | Meaning |
 | --- | ---: | --- |
-| Scatter row balance | `5.0e-2` relative | Max residual of `total - absorption - sum(P0 scatter out)` divided by `total`. |
+| Scatter row balance | `5.0e-2` relative | Max residual of `total - balance_absorption - sum(P0 scatter out)` divided by `total`, where `balance_absorption` is ordinary `absorption` for ordinary scatter or `reduced_absorption` for declared nu-weighted scatter. |
 | CHI normalization | `1.0e-6` absolute | Max `abs(sum(chi) - 1)` for fissionable calculations. |
 | Fission-source support | exact | `fission` and `nu_fission` must be positive in the same energy groups. |
 | Transport/P1 consistency | `5.0e-2` relative | Max residual between explicit `transport_total` and the flux-weighted incoming-to-outgoing P1 identity. Requires a positive, mixture-bound `/openmc_volume_flux`; otherwise the diagnostic is reported as skipped. |
@@ -37,18 +37,37 @@ means the cross sections are not on the same group structure.
 
 ## OpenMC-Side SPH Factors
 
-There is no default SPH convergence tolerance in the converter because the
-production SPH iteration now belongs upstream to OpenMC CE/MG equivalence. The
-converter expects an explicit table or sidecar of final factors:
+Converter does not calculate or tune an upstream SPH convergence tolerance.
+The standard production SPH iteration belongs upstream to OpenMC CE/MG
+equivalence. The current strict handoff contract rejects a sidecar whose
+maximum multiplicative update residual exceeds `2.0e-2`; this is a predeclared
+numerical iteration gate, not a fitted physics coefficient or final validation
+criterion, and a project may tighten it. The heterogeneous CE fine geometry
+and homogenized MG coarse geometry are different; energy groups, state,
+boundary conditions, physical volumes, and a conservative comparison-domain
+map must agree. The final sidecar is derivation evidence and the source for
+`apply-sph`; it is not by itself a production handoff. The strict physical
+contract expects an SPH-applied corrected HDF5 with `sph_applied=true`,
+`sph_apply_operator=divide-xs-by-nsph`, and the rate-preserving provenance
+copied from the converged sidecar:
 
-- one SPH factor per homogenized output region and energy group;
-- positive finite values;
-- mixture/order metadata matching the MGXS HDF5 handoff;
-- provenance identifying the OpenMC CE reference and OpenMC MG macro case.
+- one positive finite applied SPH factor per homogenized output region and
+  energy group;
+- mixture/order metadata matching the corrected MGXS HDF5 handoff;
+- provenance identifying the OpenMC CE reference and OpenMC MG macro case;
+- a rate-preserving fixed-point derivation with no ADF, empirical/global
+  coefficient, clipping, frozen group, or fitted observable.
+
+`augment-sph` only attaches factor records. It does not set the required
+applied-SPH contract and cannot replace `apply-sph` for standard production.
 
 Strict iterative tolerances such as `1.0e-12` may appear in archived legacy
 fixtures because they record a specific test run. They are not a recommended
 production default for the converter.
+
+An advanced native-DRAGON project owns its external solver tolerance and must
+record it in the deck/listing evidence accepted by `validate-native-sph`. That
+external route does not change the standard OpenMC CE/MG thresholds above.
 
 ## Diagnostics and Warning Gates
 
@@ -78,13 +97,16 @@ zero, making a universal relative-error ceiling physically meaningless. If the
 scatter moment axis cannot be established unambiguously, validation fails
 closed by treating the entire scatter dataset as production-critical.
 
-OpenMC-side SPH workflows may additionally require:
+Diagnostic OpenMC-side SPH runs may leave these checks optional. A corrected
+HDF5 accepted by the strict physical-SPH handoff must record complete
+standard-deviation coverage on both sides and explicit project-declared limits:
 
 - `--require-reference-flux-std-dev` / `--max-reference-flux-std-dev-rel`
   for the OpenMC CE reference flux used by `make-openmc-sph-sidecar`;
 - `--require-mg-flux-std-dev` / `--max-mg-flux-std-dev-rel` for the
   OpenMC MG macro flux used by `make-openmc-sph-sidecar`;
-- a relative uncertainty ceiling when the reference flux also needs one.
+- no product-wide default ceiling is supplied; each accepted project records
+  the limits it used and the observed maxima.
 
 ## Override Policy
 

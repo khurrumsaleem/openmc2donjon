@@ -22,6 +22,10 @@ from openmc2donjon.export_openmc_mgxs import (
 from openmc2donjon.energy_groups import energy_bounds_sha256
 from openmc2donjon.mgxs_input_contract import validate_input
 from openmc2donjon.multicompo import read_mgxs_hdf5
+from openmc2donjon.openmc_statepoint import (
+    _mgxs_required_check,
+    _mgxs_scatter_correction_check,
+)
 
 
 @dataclass
@@ -173,6 +177,10 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
 
             with h5py.File(path, "r") as h5:
                 bounds_digest = h5.attrs["energy_bounds_sha256"]
+                scatter_multiplicity_weighted = bool(
+                    h5.attrs["openmc_scatter_multiplicity_weighted"]
+                )
+                scatter_balance_dataset = h5.attrs["openmc_scatter_balance_dataset"]
                 mixture_names = tuple(
                     value.decode("utf-8") if isinstance(value, bytes) else str(value)
                     for value in h5["mixture_names"][:]
@@ -183,6 +191,12 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
                 source_domain_name = fuel_group.attrs["source_domain_name"]
                 source_domain_type = fuel_group.attrs["source_domain_type"]
                 scatter_axes = fuel_group.attrs["scatter_axes"]
+                fuel_scatter_multiplicity_weighted = bool(
+                    fuel_group.attrs["openmc_scatter_multiplicity_weighted"]
+                )
+                fuel_scatter_balance_dataset = fuel_group.attrs[
+                    "openmc_scatter_balance_dataset"
+                ]
                 stored_scatter = fuel_group["scatter_matrix"][:]
                 mod_scatter = h5["mixtures"]["MOD"]["scatter_matrix"][:]
 
@@ -196,6 +210,10 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
         self.assertEqual(source_domain_id, 101)
         self.assertEqual(source_domain_name, "ASM/1")
         self.assertEqual(source_domain_type, "FakeDomain")
+        self.assertFalse(scatter_multiplicity_weighted)
+        self.assertEqual(scatter_balance_dataset, "absorption")
+        self.assertFalse(fuel_scatter_multiplicity_weighted)
+        self.assertEqual(fuel_scatter_balance_dataset, "absorption")
         np.testing.assert_allclose(energy_bounds, [1.0e-5, 1.0, 1.0e3, 1.0e7])
         self.assertEqual(
             bounds_digest,
@@ -474,6 +492,10 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
                         np.array([0.05, 0.06, 0.07]),
                         np.array([0.001, 0.002, 0.003]),
                     ),
+                    "reduced absorption": StdDevMGXS(
+                        np.array([0.045, 0.055, 0.065]),
+                        np.array([0.0009, 0.0018, 0.0027]),
+                    ),
                     "fission": StdDevMGXS(
                         np.array([0.01, 0.02, 0.03]),
                         np.array([0.0001, 0.0002, 0.0003]),
@@ -516,6 +538,8 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
                 group = h5["mixtures"]["fuel"]
                 total_std_dev = group["total_std_dev"][:]
                 absorption_std_dev = group["absorption_std_dev"][:]
+                reduced_absorption = group["reduced_absorption"][:]
+                reduced_absorption_std_dev = group["reduced_absorption_std_dev"][:]
                 fission_std_dev = group["fission_std_dev"][:]
                 kappa_fission_std_dev = group["kappa_fission_std_dev"][:]
                 nu_fission_std_dev = group["nu_fission_std_dev"][:]
@@ -526,6 +550,8 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
 
         np.testing.assert_allclose(total_std_dev, [0.01, 0.02, 0.03])
         np.testing.assert_allclose(absorption_std_dev, [0.001, 0.002, 0.003])
+        np.testing.assert_allclose(reduced_absorption, [0.045, 0.055, 0.065])
+        np.testing.assert_allclose(reduced_absorption_std_dev, [0.0009, 0.0018, 0.0027])
         np.testing.assert_allclose(fission_std_dev, [0.0001, 0.0002, 0.0003])
         np.testing.assert_allclose(kappa_fission_std_dev, [1.0e-14, 1.1e-14, 1.2e-14])
         np.testing.assert_allclose(nu_fission_std_dev, [0.0005, 0.0006, 0.0007])
@@ -534,8 +560,8 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
         np.testing.assert_allclose(scatter_std_dev[0], np.eye(3) * 0.001)
         np.testing.assert_allclose(transport_total_std_dev, [0.0045, 0.0055, 0.0065])
         np.testing.assert_allclose(inverse_velocity_std_dev, [1.0e-10, 2.0e-9, 3.0e-8])
-        self.assertEqual(summary.std_dev_dataset_count, 9)
-        self.assertEqual(summary.std_dev_expected_dataset_count, 9)
+        self.assertEqual(summary.std_dev_dataset_count, 10)
+        self.assertEqual(summary.std_dev_expected_dataset_count, 10)
 
     def test_exports_ambiguous_two_group_p1_scatter_as_openmc_moment_last(self) -> None:
         class EnergyGroups2:
@@ -626,10 +652,104 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
             path = Path(tmpdir) / "mgxs.h5"
             with self.assertRaisesRegex(
                 ValueError,
-                "P1 or higher scattering requires an explicit OpenMC TransportXS",
+                "P1 or higher scattering requires the OpenMC transport MGXS",
             ):
                 export_openmc_mgxs_library(library, path)
             self.assertFalse(path.exists())
+
+    def test_rejects_active_p0_correction_before_output_for_all_scatter_types(self) -> None:
+        for scatter_type in (
+            "scatter matrix",
+            "consistent scatter matrix",
+            "nu-scatter matrix",
+            "consistent nu-scatter matrix",
+        ):
+            with self.subTest(scatter_type=scatter_type):
+                class Library(FissionFamilyFakeLibrary):
+                    correction = None  # The selected MGXS overrides the library.
+                    legendre_order = 0
+                    selected_type = scatter_type
+                    selected_correction = "P0"
+
+                    def get_mgxs(self, domain, mgxs_type):
+                        result = super().get_mgxs(domain, mgxs_type)
+                        if mgxs_type == self.selected_type:
+                            result.correction = self.selected_correction
+                            result.legendre_order = 0
+                            result.scatter_format = "legendre"
+                        return result
+
+                library = Library(
+                    fissionable=False,
+                    family={
+                        scatter_type: np.diag([0.40, 0.48, 0.56]),
+                        "reduced absorption": np.array([0.04, 0.05, 0.06]),
+                    },
+                )
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    path = Path(tmpdir) / "mgxs.h5"
+                    path.write_bytes(b"existing output must survive validation")
+                    with self.assertRaisesRegex(ValueError, "active OpenMC correction='P0'"):
+                        export_openmc_mgxs_library(
+                            library, path, scatter_mgxs_type=scatter_type
+                        )
+                    self.assertEqual(path.read_bytes(), b"existing output must survive validation")
+                    check = _mgxs_scatter_correction_check(library, scatter_type)
+                    self.assertEqual(check.status, "FAIL")
+                    library.selected_correction = None
+                    summary = export_openmc_mgxs_library(
+                        library, path, scatter_mgxs_type=scatter_type
+                    )
+                    self.assertEqual(summary.scatter_mgxs_type, scatter_type)
+                check = _mgxs_scatter_correction_check(library, scatter_type)
+                self.assertEqual(check.status, "PASS")
+
+    def test_rejects_non_scattering_matrix_as_explicit_scatter(self) -> None:
+        library = FissionFamilyFakeLibrary(
+            fissionable=False, family={"multiplicity matrix": np.eye(3)}
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "mgxs.h5"
+            with self.assertRaisesRegex(ValueError, "unsupported value 'multiplicity matrix'"):
+                export_openmc_mgxs_library(
+                    library, path, scatter_mgxs_type="multiplicity matrix"
+                )
+            self.assertFalse(path.exists())
+        check = _mgxs_required_check(
+            ("total", "absorption", "multiplicity matrix"), "multiplicity matrix"
+        )
+        self.assertEqual(check.status, "FAIL")
+
+    def test_inactive_p0_correction_at_p1_does_not_block_export(self) -> None:
+        class Library(KeywordOnlyFakeLibrary):
+            def get_mgxs(self, *, domain, mgxs_type):
+                result = super().get_mgxs(domain=domain, mgxs_type=mgxs_type)
+                if mgxs_type == "scatter matrix":
+                    result.correction = "P0" if domain.id == 101 else None
+                    result.legendre_order = 1 if domain.id == 101 else 0
+                    result.scatter_format = "legendre"
+                return result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "mgxs.h5"
+            summary = export_openmc_mgxs_library(Library(), path)
+            self.assertEqual(summary.legendre_order, 1)
+            self.assertTrue(path.exists())
+
+    def test_recipe_default_accepts_both_ordinary_and_nu_scatter(self) -> None:
+        check = _mgxs_required_check(
+            ("total", "absorption", "scatter matrix", "nu-scatter matrix"),
+            None,
+        )
+        self.assertEqual(check.status, "PASS")
+
+    def test_recipe_nu_alias_still_requires_reduced_absorption(self) -> None:
+        check = _mgxs_required_check(
+            ("total", "absorption", "consistent nu-scatter matrix", "nu-transport"),
+            "consistent_nu_scatter_matrix",
+        )
+        self.assertEqual(check.status, "FAIL")
+        self.assertIn("reduced absorption", check.detail)
 
     def test_rejects_nu_scatter_as_default_donjon_scatter(self) -> None:
         class Library:
@@ -640,7 +760,11 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
                 self.data = {
                     "total": np.array([0.5, 0.6, 0.7]),
                     "absorption": np.array([0.05, 0.06, 0.07]),
-                    "consistent nu-scatter matrix": np.eye(3),
+                    "consistent nu-scatter matrix": np.stack(
+                        (np.eye(3), np.zeros((3, 3))),
+                        axis=2,
+                    ),
+                    "nu-transport": np.array([0.45, 0.55, 0.65]),
                 }
 
             def get_mgxs(self, domain: FakeDomain, mgxs_type: str) -> FakeMGXS:
@@ -652,7 +776,7 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing ordinary OpenMC MGXS"):
                 export_openmc_mgxs_library(Library(), Path(tmpdir) / "mgxs.h5")
 
-    def test_exports_nu_scatter_only_when_explicit(self) -> None:
+    def test_exports_nu_scatter_with_reduced_absorption_when_explicit(self) -> None:
         class Library:
             def __init__(self) -> None:
                 self.energy_groups = FakeEnergyGroups()
@@ -661,7 +785,12 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
                 self.data = {
                     "total": np.array([0.5, 0.6, 0.7]),
                     "absorption": np.array([0.05, 0.06, 0.07]),
-                    "consistent nu-scatter matrix": np.eye(3),
+                    "reduced absorption": np.array([0.04, 0.05, 0.06]),
+                    "consistent nu-scatter matrix": np.stack(
+                        (np.eye(3), np.zeros((3, 3))),
+                        axis=2,
+                    ),
+                    "nu-transport": np.array([0.45, 0.55, 0.65]),
                 }
 
             def get_mgxs(self, domain: FakeDomain, mgxs_type: str) -> FakeMGXS:
@@ -678,11 +807,155 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
             )
             with h5py.File(path, "r") as h5:
                 root_type = h5.attrs["openmc_scatter_mgxs_type"]
+                root_multiplicity_weighted = bool(
+                    h5.attrs["openmc_scatter_multiplicity_weighted"]
+                )
+                root_balance_dataset = h5.attrs["openmc_scatter_balance_dataset"]
+                root_transport_type = h5.attrs["openmc_transport_mgxs_type"]
                 group_type = h5["mixtures"]["fuel"].attrs["openmc_scatter_mgxs_type"]
+                group = h5["mixtures"]["fuel"]
+                group_multiplicity_weighted = bool(
+                    group.attrs["openmc_scatter_multiplicity_weighted"]
+                )
+                group_balance_dataset = group.attrs["openmc_scatter_balance_dataset"]
+                group_transport_type = group.attrs["openmc_transport_mgxs_type"]
+                reduced_absorption = group["reduced_absorption"][:]
+                transport_total = group["transport_total"][:]
 
         self.assertEqual(summary.scatter_mgxs_type, "consistent nu-scatter matrix")
+        self.assertEqual(summary.transport_mgxs_type, "nu-transport")
         self.assertEqual(root_type, "consistent nu-scatter matrix")
+        self.assertTrue(root_multiplicity_weighted)
+        self.assertEqual(root_balance_dataset, "reduced_absorption")
+        self.assertEqual(root_transport_type, "nu-transport")
         self.assertEqual(group_type, "consistent nu-scatter matrix")
+        self.assertTrue(group_multiplicity_weighted)
+        self.assertEqual(group_balance_dataset, "reduced_absorption")
+        self.assertEqual(group_transport_type, "nu-transport")
+        np.testing.assert_allclose(reduced_absorption, [0.04, 0.05, 0.06])
+        np.testing.assert_allclose(transport_total, [0.45, 0.55, 0.65])
+
+    def test_rejects_p1_nu_scatter_with_only_ordinary_transport(self) -> None:
+        class Library:
+            def __init__(self) -> None:
+                self.energy_groups = FakeEnergyGroups()
+                self.domain = FakeDomain("fuel", 1, 3.0, False)
+                self.domains = [self.domain]
+                self.data = {
+                    "total": np.array([0.5, 0.6, 0.7]),
+                    "absorption": np.array([0.05, 0.06, 0.07]),
+                    "reduced absorption": np.array([0.04, 0.05, 0.06]),
+                    "consistent nu-scatter matrix": np.stack(
+                        (np.eye(3), np.zeros((3, 3))),
+                        axis=2,
+                    ),
+                    "transport": np.array([0.45, 0.55, 0.65]),
+                }
+
+            def get_mgxs(self, domain: FakeDomain, mgxs_type: str) -> FakeMGXS:
+                if domain is not self.domain or mgxs_type not in self.data:
+                    raise KeyError((domain, mgxs_type))
+                return FakeMGXS(self.data[mgxs_type])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "mgxs.h5"
+            with self.assertRaisesRegex(ValueError, "missing 'nu-transport' MGXS"):
+                export_openmc_mgxs_library(
+                    Library(),
+                    path,
+                    scatter_mgxs_type="consistent nu-scatter matrix",
+                )
+            self.assertFalse(path.exists())
+
+    def test_p0_mixed_transport_does_not_write_inheritable_root_contract(self) -> None:
+        class Library:
+            def __init__(self) -> None:
+                self.energy_groups = FakeEnergyGroups()
+                self.domains = [
+                    FakeDomain("with_transport", 1, 3.0, False),
+                    FakeDomain("without_transport", 2, 3.0, False),
+                ]
+                self.data = {
+                    (1, "total"): np.array([0.5, 0.6, 0.7]),
+                    (1, "absorption"): np.array([0.05, 0.06, 0.07]),
+                    (1, "scatter matrix"): np.eye(3),
+                    (1, "transport"): np.array([0.45, 0.55, 0.65]),
+                    (2, "total"): np.array([0.2, 0.3, 0.4]),
+                    (2, "absorption"): np.array([0.01, 0.02, 0.03]),
+                    (2, "scatter matrix"): np.eye(3),
+                }
+
+            def get_mgxs(self, domain: FakeDomain, mgxs_type: str) -> FakeMGXS:
+                key = (domain.id, mgxs_type)
+                if key not in self.data:
+                    raise KeyError(key)
+                return FakeMGXS(self.data[key])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "mgxs.h5"
+            summary = export_openmc_mgxs_library(Library(), path)
+            with h5py.File(path, "r") as h5:
+                self.assertNotIn("openmc_transport_mgxs_type", h5.attrs)
+                self.assertEqual(
+                    h5["mixtures/with_transport"].attrs[
+                        "openmc_transport_mgxs_type"
+                    ],
+                    "transport",
+                )
+                self.assertNotIn(
+                    "openmc_transport_mgxs_type",
+                    h5["mixtures/without_transport"].attrs,
+                )
+            report = validate_input(path)
+
+        self.assertIsNone(summary.transport_mgxs_type)
+        self.assertTrue(report.ok, report.issues)
+
+    def test_rejects_recipe_owned_transport_contract_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "mgxs.h5"
+            with self.assertRaisesRegex(
+                ValueError,
+                "root_attrs must not override exporter-owned.*openmc_transport_mgxs_type",
+            ):
+                export_openmc_mgxs_library(
+                    KeywordOnlyFakeLibrary(),
+                    path,
+                    root_attrs={"openmc_transport_mgxs_type": "nu-transport"},
+                )
+            self.assertFalse(path.exists())
+
+    def test_rejects_explicit_nu_scatter_without_reduced_absorption(self) -> None:
+        for scatter_type in ("nu-scatter matrix", "consistent nu-scatter matrix"):
+            with self.subTest(scatter_type=scatter_type):
+                class Library:
+                    def __init__(self, selected_scatter_type: str) -> None:
+                        self.energy_groups = FakeEnergyGroups()
+                        self.domain = FakeDomain("fuel", 1, 3.0, False)
+                        self.domains = [self.domain]
+                        self.data = {
+                            "total": np.array([0.5, 0.6, 0.7]),
+                            "absorption": np.array([0.05, 0.06, 0.07]),
+                            selected_scatter_type: np.eye(3),
+                        }
+
+                    def get_mgxs(self, domain: FakeDomain, mgxs_type: str) -> FakeMGXS:
+                        if domain is not self.domain or mgxs_type not in self.data:
+                            raise KeyError((domain, mgxs_type))
+                        return FakeMGXS(self.data[mgxs_type])
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    path = Path(tmpdir) / "mgxs.h5"
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "nu-weighted OpenMC MGXS .* requires OpenMC MGXS 'reduced absorption'",
+                    ):
+                        export_openmc_mgxs_library(
+                            Library(scatter_type),
+                            path,
+                            scatter_mgxs_type=scatter_type,
+                        )
+                    self.assertFalse(path.exists())
 
     def test_export_cli_reads_pickled_library(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -794,6 +1067,81 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
         self.assertEqual(mixtures[0].volume, 12.5)
         np.testing.assert_array_equal(mesh_index, [1, 1, 1])
 
+    def test_recipe_contract_fails_before_loading_statepoint(self) -> None:
+        recipe = """
+            class Library:
+                legendre_order = 1
+                mgxs_types = [
+                    "total",
+                    "absorption",
+                    "reduced absorption",
+                    "consistent nu-scatter matrix",
+                    "transport",
+                ]
+
+            def build_library():
+                return Library()
+
+            def scatter_mgxs_type():
+                return "consistent nu-scatter matrix"
+
+            def load_statepoint(library, statepoint_path):
+                statepoint_path.with_suffix(".loaded").write_text("called")
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recipe_path = Path(tmpdir) / "recipe.py"
+            statepoint_path = Path(tmpdir) / "statepoint.h5"
+            output_path = Path(tmpdir) / "mgxs.h5"
+            recipe_path.write_text(textwrap.dedent(recipe), encoding="utf-8")
+            statepoint_path.write_text("marker", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "requires 'nu-transport'"):
+                export_cli_main(
+                    [
+                        "--recipe",
+                        str(recipe_path),
+                        "--statepoint",
+                        str(statepoint_path),
+                        "-o",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertFalse(statepoint_path.with_suffix(".loaded").exists())
+            self.assertFalse(output_path.exists())
+
+    def test_p0_recipe_fails_before_loading_statepoint_or_writing_tallies(self) -> None:
+        recipe = """
+            class Library:
+                correction = "P0"
+                legendre_order = 0
+                mgxs_types = ["total", "absorption", "scatter matrix", "transport"]
+
+            def build_library():
+                return Library()
+
+            def load_statepoint(library, statepoint_path):
+                statepoint_path.with_suffix(".loaded").write_text("called")
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recipe_path = Path(tmpdir) / "recipe.py"
+            statepoint_path = Path(tmpdir) / "statepoint.h5"
+            output_path = Path(tmpdir) / "mgxs.h5"
+            tallies_path = Path(tmpdir) / "tallies.xml"
+            recipe_path.write_text(textwrap.dedent(recipe), encoding="utf-8")
+            statepoint_path.write_text("marker", encoding="utf-8")
+            for action in (
+                ["--statepoint", str(statepoint_path), "-o", str(output_path)],
+                ["--write-tallies", str(tallies_path)],
+                ["--dry-run", "--statepoint", str(statepoint_path)],
+            ):
+                with self.subTest(action=action):
+                    with self.assertRaisesRegex(ValueError, "library.correction = None"):
+                        export_cli_main(["--recipe", str(recipe_path), *action])
+            self.assertFalse(statepoint_path.with_suffix(".loaded").exists())
+            self.assertFalse(output_path.exists())
+            self.assertFalse(tallies_path.exists())
+
     def test_export_cli_writes_openmc_tallies_from_recipe(self) -> None:
         recipe = """
             class Tally:
@@ -853,6 +1201,77 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
         self.assertIn("tallies: 2 extra_tallies=1 merge=true", rendered)
         self.assertIn("tally:mgxs-merge-True", payload)
         self.assertIn("tally:surface-current", payload)
+
+    def test_export_cli_refuses_wrong_nu_transport_before_writing_tallies(
+        self,
+    ) -> None:
+        recipe = """
+            class Library:
+                mgxs_types = [
+                    "total",
+                    "absorption",
+                    "reduced absorption",
+                    "consistent nu-scatter matrix",
+                    "transport",
+                ]
+
+            def build_library(output_path):
+                return Library()
+
+            def scatter_mgxs_type():
+                return "consistent nu-scatter matrix"
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recipe_path = Path(tmpdir) / "recipe.py"
+            tallies_path = Path(tmpdir) / "tallies.xml"
+            recipe_path.write_text(textwrap.dedent(recipe), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "selected scattering requires 'nu-transport'.*declares 'transport'",
+            ):
+                export_cli_main(
+                    [
+                        "--recipe",
+                        str(recipe_path),
+                        "--write-tallies",
+                        str(tallies_path),
+                    ]
+                )
+
+            self.assertFalse(tallies_path.exists())
+
+    def test_write_tallies_rejects_nu_scatter_without_explicit_selection(self) -> None:
+        recipe = """
+            class Library:
+                legendre_order = 1
+                mgxs_types = [
+                    "total",
+                    "absorption",
+                    "reduced absorption",
+                    "consistent nu-scatter matrix",
+                    "transport",
+                ]
+
+            def build_library(output_path):
+                return Library()
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recipe_path = Path(tmpdir) / "recipe.py"
+            tallies_path = Path(tmpdir) / "tallies.xml"
+            recipe_path.write_text(textwrap.dedent(recipe), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "ordinary scatter matrix is missing"):
+                export_cli_main(
+                    [
+                        "--recipe",
+                        str(recipe_path),
+                        "--write-tallies",
+                        str(tallies_path),
+                    ]
+                )
+
+            self.assertFalse(tallies_path.exists())
 
     def test_export_cli_recipe_dry_run_without_statepoint_or_output(self) -> None:
         recipe = """
@@ -919,7 +1338,10 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
             output,
         )
         self.assertIn("WARN energy-group-identity:", output)
-        self.assertIn("PASS transport: transport MGXS declared", output)
+        self.assertIn(
+            "PASS transport: transport MGXS is paired with the selected scattering matrix",
+            output,
+        )
         self.assertIn("WARN fission-source: missing fission, nu-fission, chi", output)
         self.assertIn(
             "PASS domain-mapping: 2 cell domain(s) -> 2 DONJON mixture(s)",
@@ -974,6 +1396,60 @@ class ExportOpenMCMGXSTests(unittest.TestCase):
         self.assertIn("FAIL mgxs-required: ordinary scatter matrix is missing", output)
         self.assertIn("nu-scatter MGXS is not used as DONJON scattering", output)
         self.assertIn("mgxs_types declares nu-scatter", output)
+
+    def test_export_cli_recipe_dry_run_requires_reduced_absorption_for_explicit_nu_scatter(
+        self,
+    ) -> None:
+        recipe = """
+            from dataclasses import dataclass
+
+            import numpy as np
+
+            class EnergyGroups:
+                group_edges = np.array([1.0e-5, 1.0, 1.0e7])
+
+            @dataclass(frozen=True)
+            class Domain:
+                name: str
+                id: int
+                volume: float
+
+            class Library:
+                def __init__(self):
+                    self.energy_groups = EnergyGroups()
+                    self.domain_type = "cell"
+                    self.legendre_order = 1
+                    self.mgxs_types = [
+                        "total",
+                        "absorption",
+                        "consistent nu-scatter matrix",
+                        "transport",
+                    ]
+                    self.domains = [Domain("fuel", 1, 10.0)]
+
+            def build_library():
+                return Library()
+
+            def scatter_mgxs_type():
+                return "consistent nu-scatter matrix"
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recipe_path = Path(tmpdir) / "recipe.py"
+            recipe_path.write_text(textwrap.dedent(recipe), encoding="utf-8")
+
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                rc = export_cli_main(["--recipe", str(recipe_path), "--dry-run"])
+
+        output = stream.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("FAIL mgxs-required:", output)
+        self.assertIn("reduced absorption/reduced_absorption", output)
+        self.assertIn(
+            "FAIL transport: selected scattering requires 'nu-transport', "
+            "but library.mgxs_types declares 'transport'",
+            output,
+        )
 
     def test_export_cli_strict_dry_run_fails_on_production_findings(self) -> None:
         recipe = """

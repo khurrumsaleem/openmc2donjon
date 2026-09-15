@@ -441,16 +441,16 @@ function DonjonPageContent() {
         <WorkflowPageHeader
           step="Consumer"
           eyebrow="DONJON consumption"
-          title={strictIrenaMode ? "IRENA-30 strict full-core acceptance" : irenaMode ? "IRENA-30 legacy five-CPO deck (withdrawn)" : "Connect the checked handoff to your DONJON model"}
-          description={strictIrenaMode ? "The current physical candidate preserves all 91 fine-reference positions and uses either 91 independent coarse domains or 21 exact D3 orbits pooled during OpenMC transport. It remains on HOLD until native SPH, leakage, keff, and 91-position power gates all pass." : irenaMode ? "Historical deck preview only. Reusing five center-domain CPOs over 91 positions does not establish a position-resolved full-core equivalence result, so this route cannot be executed from the product." : "Choose a Converter object or a native-SPH-corrected MACROLIB, then adapt the ingest and solve skeleton to the geometry, mixture map, SN/SPN method, and boundary conditions of your own model."}
-          input={strictIrenaMode ? "91-position OpenMC reference + Converter object + exact coarse-domain declaration" : irenaMode ? "Historical INT, EXT, CSD, DSDF, and PNL CPO paths" : "One or more project-defined Converter or native-SPH outputs"}
+          title={strictIrenaMode ? "Advanced IRENA-30 native-SPH research template" : irenaMode ? "IRENA-30 legacy five-CPO deck (withdrawn)" : "Connect the checked handoff to your DONJON model"}
+          description={strictIrenaMode ? "This project-specific native-DRAGON research template preserves all 91 fine-reference positions and uses either 91 independent coarse domains or 21 exact D3 orbits pooled during OpenMC transport. It remains on HOLD and is not the standard OpenMC MG SPH route." : irenaMode ? "Historical deck preview only. Reusing five center-domain CPOs over 91 positions does not establish a position-resolved full-core equivalence result, so this route cannot be executed from the product." : "Choose a checked Converter object and adapt the ingest and solve skeleton to your geometry, mixture map, SN/SPN method, and boundary conditions. An explicitly declared advanced native-SPH project may instead select its corrected MACROLIB."}
+          input={strictIrenaMode ? "Advanced native-SPH project: 91-position OpenMC reference + Converter object + exact coarse-domain declaration" : irenaMode ? "Historical INT, EXT, CSD, DSDF, and PNL CPO paths" : "One or more checked Converter outputs, or an explicit advanced native-SPH artifact"}
           output={strictIrenaMode ? "HOLD until full-core physical acceptance passes" : irenaMode ? `${IRENA30_LEGACY_DECK_STATUS} .x2m preview` : "User-defined DRAGON/DONJON result"}
           actions={
             <Link
               href={strictIrenaMode ? (projectRoot ? `/projects?project=${encodeURIComponent(projectRoot)}` : "/projects") : irenaMode ? "/donjon?mode=irena30-fullcore" : (projectRoot ? `/convert?project=${encodeURIComponent(projectRoot)}` : "/convert")}
               className="btn btn-secondary"
             >
-              {strictIrenaMode ? "Open project" : irenaMode ? "Open current IRENA route" : "Back to Converter"}
+              {strictIrenaMode ? "Open research project" : irenaMode ? "Open IRENA research template" : "Back to Converter"}
             </Link>
           }
         />
@@ -484,7 +484,7 @@ function DonjonPageContent() {
         <FormStep
           number="A"
           title={irenaMode || strictIrenaMode ? "Generic: inspect one ASCII object" : "Select one checked handoff object"}
-          description={strictIrenaMode ? "This optional smoke-test is not the strict IRENA full-core solver or acceptance validator." : irenaMode ? "Use this separate diagnostic path to smoke-test one CPO or MACROLIB. It is independent of the withdrawn IRENA deck preview above." : "Smoke-test one Converter or native-SPH output and use the generated skeleton as the starting point for your own consumer model."}
+          description={strictIrenaMode ? "This optional smoke-test is not the strict IRENA full-core solver or acceptance validator." : irenaMode ? "Use this separate diagnostic path to smoke-test one CPO or MACROLIB. It is independent of the withdrawn IRENA deck preview above." : "Smoke-test one checked Converter output and use the generated skeleton as the starting point for your own consumer model. Advanced native-SPH output remains an explicit project-specific input."}
           className="surface"
         >
           <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
@@ -762,7 +762,7 @@ function GenericConsumerPanel({
       <p className="mt-2 max-w-3xl text-[12px] leading-5 text-[var(--fg-2)]">
         {projectStatus?.configured
           ? `This project declares ${required} required component${required === 1 ? "" : "s"}. ${projectStatus.accepted_outputs} Converter handoff contract${projectStatus.accepted_outputs === 1 ? " has" : "s have"} passed. This is not a physics verdict; the consumer geometry and mixture map remain the responsibility of ${projectStatus.consumer.label}.`
-          : "Open a project manifest to track a component set, or use the generic ingest builder below for a standalone Converter or native-SPH output. Converter does not invent a component count, core layout, or solver order."}
+          : "Open a project manifest to track a component set, or use the generic ingest builder below for a standalone checked Converter output. Advanced native-SPH artifacts remain project-specific. Converter does not invent a component count, core layout, or solver order."}
       </p>
       {projectStatus?.configured && projectStatus.components.length ? (
         <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
@@ -1043,7 +1043,7 @@ function IrenaColorsetCorePanel({
             This archived mapping takes <span className="font-mono">FROM 1</span>{" "}
             from each <span className="font-mono">L_MULTICOMPO</span> and reuses only
             five labels across the whole map. It does not retain the 91-position or
-            21-orbit transport-time domain evidence required by the current IRENA route.
+            21-orbit transport-time domain evidence required by a position-resolved IRENA acceptance case.
           </p>
         </div>
         <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.13em] text-amber-100">

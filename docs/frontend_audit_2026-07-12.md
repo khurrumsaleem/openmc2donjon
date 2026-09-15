@@ -1,5 +1,11 @@
 # Frontend button-by-button audit — 2026-07-12
 
+> Historical audit record. Its quoted UI copy and route descriptions capture
+> the product on 2026-07-12 and are not normative physics guidance. The current
+> standard SPH route is the heterogeneous OpenMC CE fine reference ->
+> homogenized OpenMC MG coarse rate-preserving iteration -> corrected HDF5 ->
+> Converter workflow defined in `PRODUCT_MODEL.md`.
+
 Method: full interactive walk of every page/button against `openmc2donjon serve --mock` (browser), plus a 68-agent code audit (9 scoped auditors → dedupe → 1 adversarial verifier per finding). 72 raw → 58 deduped → 54 confirmed, 3 refuted, 1 verifier lost to an API drop (its finding is included below marked UNVERIFIED).
 
 Live-reproduced in the browser during the walk: the /convert "Output ready" contradiction (Refresh does not clear it), the /builder file dialog hiding all selectable files ("3 non-input file files hidden"), the file-browser dead parent/breadcrumb after a 404 listing (network trace shows no request fired), the demo preview ENERGY=MISSING vs "ADF 9/4f + SPH 9" contradiction, and the /inspect path-echo mismatch.

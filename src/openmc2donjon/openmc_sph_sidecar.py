@@ -5,14 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+from typing import Any
 
 from . import __version__
+from .openmc_provenance import file_sha256
 from .sph_augment import SphSidecarReport, create_table_sph_sidecar
 from .sph_iteration import SphUpdateTableReport, create_sph_update_table
 
 
 SCHEMA = "openmc2donjon.openmc-sph-sidecar.v1"
 PASS_DECISION = "openmc2donjon_openmc_sph_sidecar_passed"
+SOURCE_BINDING_SCHEMA = "openmc2donjon.openmc-sph-source-bindings.v1"
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,7 @@ class OpenmcSphSidecarReport:
     mg_flux: str | Path
     update: SphUpdateTableReport
     sidecar: SphSidecarReport
+    source_bindings: dict[str, Any]
 
 
 def create_openmc_sph_sidecar(
@@ -37,8 +41,8 @@ def create_openmc_sph_sidecar(
     damping: float = 1.0,
     clip_min: float | None = None,
     clip_max: float | None = None,
-    flux_normalization: str = "none",
-    sph_target: str = "flux",
+    flux_normalization: str = "auto",
+    sph_target: str = "rate",
     zero_flux_policy: str = "reject",
     flux_floor_rel: float | None = None,
     freeze_groups: tuple[int, ...] | None = None,
@@ -57,8 +61,15 @@ def create_openmc_sph_sidecar(
     """Compute OpenMC CE/MG SPH factors and write a sidecar HDF5.
 
     ``reference_flux`` is the OpenMC continuous-energy reference flux and
-    ``mg_flux`` is the OpenMC multi-group macro flux. Both must use the same
-    geometry, mixture ordering, and energy-group order as ``input_h5``.
+    ``mg_flux`` is the OpenMC multi-group macro flux.  The CE calculation uses
+    the detailed fine geometry and the MG calculation uses the homogenized
+    coarse geometry.  Their comparison-domain ordering, energy-group
+    structure, physical state, and boundary conditions must be aligned with
+    the declared ``input_h5`` handoff.
+    The default target preserves reaction rates and the default normalization
+    resolves group-wise H-FACTOR/kappa-fission data to power normalization.
+    ``sph_target="flux"`` and non-power normalizations are retained for
+    explicit diagnostic studies.
     """
 
     input_h5 = Path(input_h5)
@@ -70,6 +81,14 @@ def create_openmc_sph_sidecar(
     )
     if output_table == output_h5:
         raise ValueError("--table-output must be different from --output")
+    _reject_source_output_aliases(
+        input_h5=input_h5,
+        reference_flux=reference_flux,
+        mg_flux=mg_flux,
+        previous_sph=previous_sph,
+        output_h5=output_h5,
+        output_table=output_table,
+    )
     if output_h5.exists() and not force:
         raise FileExistsError(f"output already exists; use --force to overwrite: {output_h5}")
 
@@ -96,6 +115,13 @@ def create_openmc_sph_sidecar(
         force=force,
         summary_json=None,
     )
+    source_bindings = _source_bindings(
+        update,
+        require_reference_flux_std_dev=require_reference_flux_std_dev,
+        max_reference_flux_std_dev_rel=max_reference_flux_std_dev_rel,
+        require_mg_flux_std_dev=require_mg_flux_std_dev,
+        max_mg_flux_std_dev_rel=max_mg_flux_std_dev_rel,
+    )
     sidecar = create_table_sph_sidecar(
         input_h5,
         output_h5,
@@ -106,7 +132,11 @@ def create_openmc_sph_sidecar(
         sph_applied=sph_applied,
         summary_json=None,
     )
-    _write_physics_provenance(output_h5, update)
+    source_bindings = _write_physics_provenance(
+        output_h5,
+        update,
+        source_bindings=source_bindings,
+    )
     report = OpenmcSphSidecarReport(
         input_h5=input_h5,
         output_h5=output_h5,
@@ -115,6 +145,7 @@ def create_openmc_sph_sidecar(
         mg_flux=mg_flux,
         update=update,
         sidecar=sidecar,
+        source_bindings=source_bindings,
     )
     print_report(report)
     if summary_json is not None:
@@ -122,7 +153,12 @@ def create_openmc_sph_sidecar(
     return report
 
 
-def _write_physics_provenance(path: Path, update: SphUpdateTableReport) -> None:
+def _write_physics_provenance(
+    path: Path,
+    update: SphUpdateTableReport,
+    *,
+    source_bindings: dict[str, Any],
+) -> dict[str, Any]:
     """Persist the derivation and convergence evidence beside the factors."""
 
     import h5py
@@ -152,6 +188,180 @@ def _write_physics_provenance(path: Path, update: SphUpdateTableReport) -> None:
         )
         h5.attrs["sph_tied_bin_count"] = update.tied_bin_count
         h5.attrs["sph_clipped_count"] = update.clipped_count
+        for name, value in source_bindings.items():
+            if value is not None:
+                h5.attrs[name] = value
+    return source_bindings
+
+
+def _reject_source_output_aliases(
+    *,
+    input_h5: Path,
+    reference_flux: str | Path,
+    mg_flux: str | Path,
+    previous_sph: str | Path | None,
+    output_h5: Path,
+    output_table: Path,
+) -> None:
+    sources = {
+        "input HDF5": input_h5,
+        "reference flux": _source_file(reference_flux),
+        "MG flux": _source_file(mg_flux),
+    }
+    if previous_sph is not None:
+        sources["previous SPH"] = _source_file(previous_sph)
+    for label, source in sources.items():
+        for output in (output_h5, output_table):
+            if source.expanduser().resolve() == output.expanduser().resolve():
+                raise ValueError(
+                    f"{label} source must be different from output path {output}"
+                )
+
+
+def _source_file(source: str | Path) -> Path:
+    text = str(source)
+    path_text, separator, _dataset = text.partition("::")
+    return Path(path_text if separator else text)
+
+
+def _source_bindings(
+    update: SphUpdateTableReport,
+    *,
+    require_reference_flux_std_dev: bool,
+    max_reference_flux_std_dev_rel: float | None,
+    require_mg_flux_std_dev: bool,
+    max_mg_flux_std_dev_rel: float | None,
+) -> dict[str, Any]:
+    input_h5 = update.input_h5.expanduser().resolve()
+    reference_flux = update.reference_flux_source.expanduser().resolve()
+    mg_flux = update.low_order_flux_source.expanduser().resolve()
+    previous_sph = (
+        None
+        if update.previous_sph_source is None
+        else update.previous_sph_source.expanduser().resolve()
+    )
+    bindings = {
+        "sph_source_binding_schema": SOURCE_BINDING_SCHEMA,
+        "sph_input_h5_path": str(input_h5),
+        "sph_input_h5_sha256": file_sha256(input_h5),
+        "sph_reference_flux_path": str(reference_flux),
+        "sph_reference_flux_sha256": file_sha256(reference_flux),
+        "sph_reference_flux_dataset": update.reference_flux_dataset,
+        "sph_reference_flux_layout_verified": _flux_layout_verified(
+            reference_flux,
+            update.reference_flux_dataset,
+        ),
+        "sph_mg_flux_path": str(mg_flux),
+        "sph_mg_flux_sha256": file_sha256(mg_flux),
+        "sph_mg_flux_dataset": update.low_order_flux_dataset,
+        "sph_mg_flux_layout_verified": _flux_layout_verified(
+            mg_flux,
+            update.low_order_flux_dataset,
+        ),
+        "sph_previous_sph_used": previous_sph is not None,
+        "sph_previous_sph_path": (
+            None if previous_sph is None else str(previous_sph)
+        ),
+        "sph_previous_sph_sha256": (
+            None if previous_sph is None else file_sha256(previous_sph)
+        ),
+        "sph_previous_sph_dataset": update.previous_sph_dataset,
+    }
+    bindings.update(
+        _uncertainty_bindings(
+            prefix="sph_reference_flux",
+            require_coverage=require_reference_flux_std_dev,
+            limit=max_reference_flux_std_dev_rel,
+            observed=update.reference_flux_max_relative_std_dev,
+            std_dev_dataset=update.reference_flux_std_dev_dataset,
+        )
+    )
+    bindings.update(
+        _uncertainty_bindings(
+            prefix="sph_mg_flux",
+            require_coverage=require_mg_flux_std_dev,
+            limit=max_mg_flux_std_dev_rel,
+            observed=update.low_order_flux_max_relative_std_dev,
+            std_dev_dataset=update.low_order_flux_std_dev_dataset,
+        )
+    )
+    return bindings
+
+
+def _uncertainty_bindings(
+    *,
+    prefix: str,
+    require_coverage: bool,
+    limit: float | None,
+    observed: float | None,
+    std_dev_dataset: str | None,
+) -> dict[str, Any]:
+    coverage = bool(std_dev_dataset) and observed is not None
+    passed = (
+        bool(require_coverage)
+        and coverage
+        and limit is not None
+        and observed is not None
+        and _finite_nonnegative(limit)
+        and _finite_nonnegative(observed)
+        and observed <= limit
+    )
+    return {
+        f"{prefix}_uncertainty_require_coverage": bool(require_coverage),
+        f"{prefix}_uncertainty_coverage": coverage,
+        f"{prefix}_uncertainty_limit": limit,
+        f"{prefix}_uncertainty_observed_max_rel": observed,
+        f"{prefix}_uncertainty_pass": passed,
+        f"{prefix}_std_dev_dataset": std_dev_dataset,
+    }
+
+
+def _finite_nonnegative(value: float) -> bool:
+    import math
+
+    return math.isfinite(float(value)) and float(value) >= 0.0
+
+
+def _flux_layout_verified(path: Path, dataset_path: str | None) -> bool:
+    """Return true only for an explicit HDF5 tally-layout attestation."""
+
+    if dataset_path is None:
+        return False
+    try:
+        import h5py
+
+        if not h5py.is_hdf5(path):
+            return False
+        with h5py.File(path, "r") as h5:
+            if dataset_path not in h5:
+                return False
+            dataset = h5[dataset_path]
+            if not hasattr(dataset, "attrs"):
+                return False
+            return (
+                _boolean_value(dataset.attrs.get("energy_bounds_verified")) is True
+                and _boolean_value(
+                    dataset.attrs.get("spatial_domain_order_verified")
+                )
+                is True
+            )
+    except OSError:
+        return False
+
+
+def _boolean_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    text = "" if value is None else str(value).strip().lower()
+    if text in {"true", "1"}:
+        return True
+    if text in {"false", "0"}:
+        return False
+    return None
 
 
 def print_report(report: OpenmcSphSidecarReport) -> None:
@@ -223,6 +433,7 @@ def write_summary(path: Path, report: OpenmcSphSidecarReport) -> None:
         "raw_update_maximum": report.update.raw_update_maximum,
         "clipped_count": report.update.clipped_count,
         "source_label": report.update.source_label,
+        "source_bindings": report.source_bindings,
         "formula": (
             "sph = previous_sph * "
             "(normalized_openmc_mg_flux / (previous_sph * openmc_ce_reference_flux)) "

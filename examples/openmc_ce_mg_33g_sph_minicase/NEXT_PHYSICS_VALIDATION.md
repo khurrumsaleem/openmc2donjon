@@ -1,8 +1,9 @@
 # Next Physics Validation Target
 
-The current three-region minicase proves the OpenMC CE/MG SPH handoff and
-DONJON consumption route.  The next validation case should be larger and more
-benchmark-like, but still small enough to run repeatedly during development.
+The current three-region same-partition minicase proves only the OpenMC CE/MG
+iteration and DONJON handoff mechanics. The next validation case must add the
+actual homogenization problem while remaining small enough to run repeatedly
+during development.
 
 ## Goal
 
@@ -10,9 +11,10 @@ Show that OpenMC-side SPH improves a DONJON low-order solve for a nontrivial
 colorset:
 
 ```text
-OpenMC CE reference
-  + OpenMC MG macro solve on the same geometry/output regions
-  -> OpenMC-side SPH(region, group)
+OpenMC CE detailed heterogeneous reference geometry
+  + OpenMC MG homogenized coarse geometry
+    with a declared fine-to-coarse comparison-domain map
+  -> rate-preserving OpenMC MG SPH(region, group)
   -> corrected MACROLIB
   -> DONJON diffusion / SPN solve
   -> compare low-order flux and reaction-rate diagnostics against OpenMC CE
@@ -35,19 +37,20 @@ Start with a two-dimensional colorset before moving to a full assembly:
 
 | Feature | Recommendation |
 | --- | --- |
-| Geometry | 2D Cartesian colorset, 5 to 9 output regions |
+| Fine geometry | 2D heterogeneous colorset with resolved material/pin detail |
+| Coarse geometry | Homogenized model with 5 to 9 output regions used by the downstream solver |
 | Boundary | Reflective first; leakage boundary later |
 | Materials | At least fuel, moderator, absorber/control-like, reflector-like |
 | Energy groups | Any supported OpenMC group mesh; ECCO-33 remains a convenient default |
 | Converter handoff | P3 Legendre MGXS |
 | OpenMC MG macro solve | H16 histogram scatter by default |
-| Equivalence factors | Scalar `SPH(region, group)` |
+| Equivalence factors | Rate-preserving scalar `SPH(domain, group)` |
 | DONJON consumer | `L_MACROLIB` first; `L_MULTICOMPO` remains archival/mapped output |
 
 This case should have enough regions that SPH is meaningful, but not so many
 that Monte Carlo statistics dominate every review cycle.
 
-The repository now includes the first version of that case as a selectable
+The repository includes a larger same-partition diagnostic as a selectable
 variant of this example:
 
 ```sh
@@ -57,7 +60,9 @@ bash examples/openmc_ce_mg_33g_sph_minicase/run_workflow.sh
 ```
 
 The variant is intentionally wired through the same scripts as the three-region
-smoke, so any change to the CE/MG/SPH route is exercised by both geometries.
+smoke, so changes to the loop mechanics are exercised at a larger size. It
+still does not supply the different fine and coarse geometries required by the
+physical validation target above.
 
 ## Required Artifacts
 
@@ -89,10 +94,10 @@ colorset geometry and aggregates repeated DONJON cell unknowns back to OpenMC
 output regions before comparing flux shapes.  That removes the previous 1D
 slab approximation from this validation step.
 
-## Current Five-Region Production Snapshot
+## Current Five-Region Diagnostic Snapshot
 
-A local `five_region_2d` run has closed the complete route at production
-quality:
+A local `five_region_2d` run has closed the diagnostic route with high
+statistics:
 
 ```sh
 OPENMC2DONJON_COLORSET_VARIANT=five_region_2d \
@@ -114,10 +119,10 @@ inverted update and was invalidated.
 
 | Quantity | Result |
 | --- | ---: |
-| Summary decision | `openmc_ce_mg_sph_production_quality` |
+| Historical schema decision | `openmc_ce_mg_sph_production_quality` |
 | CE flux max relative std dev | 0.0406169 |
 | MG flux max relative std dev | 0.0447442 |
-| Production flux uncertainty threshold | 0.05 |
+| Diagnostic flux uncertainty threshold | 0.05 |
 | SPH minimum | 0.927331 |
 | SPH maximum | 1.13000 |
 | Max `abs(SPH - 1)` | 0.130003 |
@@ -147,24 +152,35 @@ bash examples/openmc_ce_mg_33g_sph_minicase/run_donjon_solve_diagnostic.sh
 | uncorrected | SPN3 | 1.298612 | 0.225032 | 0.910189 | 0.429037 |
 | SPH-corrected | SPN3 | 1.304875 | 0.224348 | 0.908928 | 0.419784 |
 
-This is useful evidence for the new route: with the fixed update direction
-the corrected operator moves k toward the OpenMC CE reference (+649 pcm
-diffusion, +626 pcm SPN3) and improves the CE flux-shape and reaction-rate
-residuals for both modes.  The low-order flux-shape residual remains large
-in this small colorset, so this is production-quality handoff evidence rather
-than a final benchmark-quality deterministic validation.
+This is useful high-statistics evidence for the iteration and handoff
+mechanics: with the fixed update direction the corrected operator moves k
+toward the OpenMC CE reference (+649 pcm diffusion, +626 pcm SPN3) and
+improves the CE flux-shape and reaction-rate residuals for both modes.  The
+low-order flux-shape residual remains large, the CE/MG partition is unchanged,
+and the target is flux rather than rate.  Therefore this snapshot is not
+evidence that the physical route proposed above has passed.
 
 With the fixed loop, the three-iteration run behaves as a contraction: the
 first iteration removes the systematic CE/MG defect (raw updates up to about
 8% from unity) and iterations two and three stay within the Monte Carlo
 noise band of the flux ratios.  The pre-fix conclusion that iteration
-overshoots and that one-shot SPH should be the accepted baseline was an
+overshoots and that one-shot SPH should be preferred as the baseline was an
 artifact of the inverted update and no longer applies.
 
-## Acceptance Criteria
+The machine decision `openmc_ce_mg_sph_production_quality` is retained in the
+recorded schema for compatibility.  For this old example it means only that
+the handoff was structurally complete and met its historical statistics gate.
 
-A run is useful as production evidence when:
+## Physical Validation Acceptance Criteria
 
+A future run is useful as physical-SPH evidence only when:
+
+- The CE model is detailed and heterogeneous, while the MG model is the
+  declared homogenized coarse geometry.
+- The fine-to-coarse comparison-domain map, energy mesh, physical state,
+  boundary conditions, and normalization are explicit and auditable.
+- The SPH target is rate preservation, not the flux-target diagnostic used by
+  the snapshot above.
 - CE and MG flux relative standard deviations are below the selected review
   threshold, preferably 5% or lower.
 - SPH factors are finite, positive, and not clipped.

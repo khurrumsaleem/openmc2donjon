@@ -22,7 +22,7 @@ export const OPENMC_ENTRY_POINTS: readonly OpenmcEntryPoint[] = [
     eyebrow: "Need HDF5 first",
     title: "Prepare OpenMC MGXS HDF5",
     body:
-      "Start here when your input is an OpenMC recipe/statepoint and you still need the MGXS HDF5. If that HDF5 already exists, skip this page and open Converter.",
+      "Start here when your input is an OpenMC recipe/statepoint and you still need the MGXS HDF5. Skip to Converter only when the existing HDF5 is already ready, including any required upstream correction.",
     primaryLabel: "Plan HDF5 export",
     secondaryHref: "/convert?intent=direct-convert&format=multicompo&check=1&production=1",
     secondaryLabel: "Already have HDF5? Open Converter",
@@ -33,10 +33,10 @@ export const OPENMC_ENTRY_POINTS: readonly OpenmcEntryPoint[] = [
   },
   {
     id: "openmc-sph",
-    eyebrow: "SPH equivalence",
-    title: "Prepare matched CE/MG domains and their SPH",
+    eyebrow: "Recommended SPH equivalence",
+    title: "Preserve rates from CE fine to MG coarse",
     body:
-      "Compare a fine CE reference against its homogenized MG model on the same project-declared domains, iterate rate-preserving NSPH to convergence, pre-apply the validated factors, then send that HDF5 to Converter.",
+      "Compare a heterogeneous fine-geometry CE reference with a homogenized coarse-geometry MG model. Match the CE tally bins to the MG transport group boundaries, then align physical state, boundary conditions, and the declared fine-to-coarse domain mapping; iterate rate-preserving NSPH, apply the converged factors, then send the corrected HDF5 to Converter.",
     primaryLabel: "Plan CE/MG SPH route",
     secondaryHref:
       "/openmc?workflow=two-step&equivalence=sph&format=multicompo&production=1#openmc-sph-summary",

@@ -13,6 +13,7 @@ import numpy as np
 from . import __version__
 from .hdf5_names import read_mixture_names
 from .openmc_provenance import (
+    file_sha256,
     provenance_before_hdf5_mutation,
     refresh_openmc_provenance_after_hdf5_mutation,
 )
@@ -20,10 +21,12 @@ from .sph_augment import load_sph_source
 
 
 SCHEMA = "openmc2donjon.sph-apply.v1"
+APPLY_BINDING_SCHEMA = "openmc2donjon.sph-apply-bindings.v1"
 
 VECTOR_XS_DATASETS = (
     "total",
     "absorption",
+    "reduced_absorption",
     "fission",
     "nu_fission",
     "transport_total",
@@ -43,6 +46,46 @@ OPENMC_MGXS_VECTOR_DATASETS = (
     "kappa-fission",
 )
 SPH_DATASETS = ("sph", "SPH", "NSPH")
+SOURCE_PROVENANCE_ATTRS = (
+    "sph_source_binding_schema",
+    "sph_input_h5_path",
+    "sph_input_h5_sha256",
+    "sph_reference_flux_path",
+    "sph_reference_flux_sha256",
+    "sph_reference_flux_dataset",
+    "sph_reference_flux_layout_verified",
+    "sph_reference_flux_uncertainty_require_coverage",
+    "sph_reference_flux_uncertainty_coverage",
+    "sph_reference_flux_uncertainty_limit",
+    "sph_reference_flux_uncertainty_observed_max_rel",
+    "sph_reference_flux_uncertainty_pass",
+    "sph_reference_flux_std_dev_dataset",
+    "sph_mg_flux_path",
+    "sph_mg_flux_sha256",
+    "sph_mg_flux_dataset",
+    "sph_mg_flux_layout_verified",
+    "sph_mg_flux_uncertainty_require_coverage",
+    "sph_mg_flux_uncertainty_coverage",
+    "sph_mg_flux_uncertainty_limit",
+    "sph_mg_flux_uncertainty_observed_max_rel",
+    "sph_mg_flux_uncertainty_pass",
+    "sph_mg_flux_std_dev_dataset",
+    "sph_previous_sph_used",
+    "sph_previous_sph_path",
+    "sph_previous_sph_sha256",
+    "sph_previous_sph_dataset",
+)
+SOURCE_BOOLEAN_ATTRS = (
+    "sph_reference_flux_layout_verified",
+    "sph_reference_flux_uncertainty_require_coverage",
+    "sph_reference_flux_uncertainty_coverage",
+    "sph_reference_flux_uncertainty_pass",
+    "sph_mg_flux_layout_verified",
+    "sph_mg_flux_uncertainty_require_coverage",
+    "sph_mg_flux_uncertainty_coverage",
+    "sph_mg_flux_uncertainty_pass",
+    "sph_previous_sph_used",
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +98,10 @@ class SphApplyReport:
     scaled_dataset_count: int
     sph_min: float
     sph_max: float
+    input_h5_sha256: str
+    sph_source_sha256: str
+    binding_mode: str
+    sidecar_input_hash_verified: bool
     operator: str = "divide-xs-by-nsph"
     input_format: str = "converter"
 
@@ -75,6 +122,11 @@ def print_report(report: SphApplyReport) -> None:
     print(f"  output: {report.output_h5}")
     print(f"  input format: {report.input_format}")
     print(f"  operator: {report.operator}")
+    print(f"  binding mode: {report.binding_mode}")
+    print(
+        "  sidecar input hash verified: "
+        f"{str(report.sidecar_input_hash_verified).lower()}"
+    )
     print(f"  mixtures: {len(report.mixture_names)}")
     print(f"  energy groups: {report.energy_groups}")
     print(f"  scaled datasets: {report.scaled_dataset_count}")
@@ -111,6 +163,10 @@ def summary_payload(report: SphApplyReport) -> dict[str, Any]:
         "scaled_dataset_count": report.scaled_dataset_count,
         "sph_min": report.sph_min,
         "sph_max": report.sph_max,
+        "input_h5_sha256": report.input_h5_sha256,
+        "sph_source_sha256": report.sph_source_sha256,
+        "binding_mode": report.binding_mode,
+        "sidecar_input_hash_verified": report.sidecar_input_hash_verified,
     }
 
 
@@ -213,16 +269,20 @@ def apply_sph_to_hdf5(
         raise ValueError("output HDF5 must be different from input HDF5")
     if output_h5.exists() and not force:
         raise FileExistsError(f"output already exists; use --force to overwrite: {output_h5}")
+    input_h5_sha256 = file_sha256(input_h5)
+    sph_source_sha256 = file_sha256(sph_source)
     openmc_provenance = provenance_before_hdf5_mutation(input_h5)
 
     with h5py.File(input_h5, "r") as h5:
         mixture_names = read_mixture_names(h5)
         energy_groups = _energy_groups(h5)
+        _require_supported_converter_state_layout(h5, mixture_names)
     loaded = load_sph_source(
         sph_source,
         mixture_names=mixture_names,
         energy_groups=energy_groups,
     )
+    _verify_bound_input_hash(loaded.root_sph_attrs, input_h5_sha256)
 
     output_h5.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(input_h5, output_h5)
@@ -238,9 +298,18 @@ def apply_sph_to_hdf5(
         h5.attrs["sph_applied"] = True
         h5.attrs["sph_apply_schema"] = SCHEMA
         h5.attrs["sph_apply_operator"] = "divide-xs-by-nsph"
-        h5.attrs["sph_applied_source"] = str(sph_source)
+        h5.attrs["sph_applied_source"] = str(sph_source.expanduser().resolve())
         h5.attrs["sph_package_version"] = __version__
         _copy_sph_provenance_attrs(h5, loaded.root_sph_attrs)
+        _write_apply_bindings(
+            h5,
+            input_h5=input_h5,
+            input_h5_sha256=input_h5_sha256,
+            sph_source=sph_source,
+            sph_source_sha256=sph_source_sha256,
+            binding_mode="converter-final-exact-input",
+            sidecar_input_hash_verified=True,
+        )
     refresh_openmc_provenance_after_hdf5_mutation(
         output_h5,
         openmc_provenance,
@@ -255,6 +324,10 @@ def apply_sph_to_hdf5(
         scaled_dataset_count=scaled_count,
         sph_min=float(np.min(sph_matrix)),
         sph_max=float(np.max(sph_matrix)),
+        input_h5_sha256=input_h5_sha256,
+        sph_source_sha256=sph_source_sha256,
+        binding_mode="converter-final-exact-input",
+        sidecar_input_hash_verified=True,
     )
 
 
@@ -271,6 +344,12 @@ def apply_sph_to_openmc_mgxs_hdf5(
     ``set2``, ... instead of the converter-facing ``/mixtures/<name>`` layout.
     The mapping is therefore by sidecar order: first SPH mixture -> ``set1``,
     second -> ``set2``, and so on.
+
+    This is an intermediate OpenMC MG iteration artifact.  Its native ``setN``
+    bytes cannot equal the Converter-layout HDF5 bound when the sidecar was
+    derived, so the application is recorded as unbound rather than claiming a
+    false input-hash match.  A final Converter handoff must use
+    :func:`apply_sph_to_hdf5` against the exact bound input.
     """
 
     import h5py
@@ -286,11 +365,14 @@ def apply_sph_to_openmc_mgxs_hdf5(
         raise ValueError("output HDF5 must be different from input HDF5")
     if output_h5.exists() and not force:
         raise FileExistsError(f"output already exists; use --force to overwrite: {output_h5}")
+    input_h5_sha256 = file_sha256(input_h5)
+    sph_source_sha256 = file_sha256(sph_source)
     openmc_provenance = provenance_before_hdf5_mutation(input_h5)
 
     with h5py.File(input_h5, "r") as h5:
         energy_groups = _energy_groups(h5)
         macroscopic_names = _openmc_macroscopic_names(h5)
+        _require_supported_openmc_state_layout(h5, macroscopic_names)
     mixture_names = _sph_source_mixture_names(sph_source)
     if len(macroscopic_names) != len(mixture_names):
         raise ValueError(
@@ -314,11 +396,20 @@ def apply_sph_to_openmc_mgxs_hdf5(
         h5.attrs["sph_apply_schema"] = SCHEMA
         h5.attrs["sph_apply_operator"] = "divide-xs-by-nsph"
         h5.attrs["sph_apply_input_format"] = "openmc-mgxs"
-        h5.attrs["sph_applied_source"] = str(sph_source)
+        h5.attrs["sph_applied_source"] = str(sph_source.expanduser().resolve())
         h5.attrs["sph_package_version"] = __version__
         h5.attrs["sph_applied_mixture_names"] = np.asarray(mixture_names, dtype="S")
         h5.attrs["sph_applied_macroscopic_names"] = np.asarray(macroscopic_names, dtype="S")
         _copy_sph_provenance_attrs(h5, loaded.root_sph_attrs)
+        _write_apply_bindings(
+            h5,
+            input_h5=input_h5,
+            input_h5_sha256=input_h5_sha256,
+            sph_source=sph_source,
+            sph_source_sha256=sph_source_sha256,
+            binding_mode="openmc-mgxs-intermediate-unbound",
+            sidecar_input_hash_verified=False,
+        )
     refresh_openmc_provenance_after_hdf5_mutation(
         output_h5,
         openmc_provenance,
@@ -333,14 +424,29 @@ def apply_sph_to_openmc_mgxs_hdf5(
         scaled_dataset_count=scaled_count,
         sph_min=float(np.min(sph_matrix)),
         sph_max=float(np.max(sph_matrix)),
+        input_h5_sha256=input_h5_sha256,
+        sph_source_sha256=sph_source_sha256,
+        binding_mode="openmc-mgxs-intermediate-unbound",
+        sidecar_input_hash_verified=False,
         input_format="openmc-mgxs",
     )
 
 
 def _copy_sph_provenance_attrs(h5: Any, attrs: dict[str, Any]) -> None:
+    for name in SOURCE_PROVENANCE_ATTRS:
+        if name in h5.attrs:
+            del h5.attrs[name]
     if "sph_kind" in attrs:
         h5.attrs["sph_kind"] = attrs["sph_kind"]
-    h5.attrs["sph_real"] = bool(attrs.get("sph_real", True))
+    elif "sph_kind" in h5.attrs:
+        del h5.attrs["sph_kind"]
+    if "sph_real" in attrs:
+        h5.attrs["sph_real"] = _required_boolean(
+            attrs["sph_real"],
+            "SPH sidecar sph_real",
+        )
+    else:
+        h5.attrs["sph_real"] = False
     for name in (
         "sph_derivation",
         "sph_target",
@@ -358,6 +464,51 @@ def _copy_sph_provenance_attrs(h5: Any, attrs: dict[str, Any]) -> None:
     ):
         if name in attrs:
             h5.attrs[name] = attrs[name]
+        elif name in h5.attrs:
+            del h5.attrs[name]
+    for name in SOURCE_PROVENANCE_ATTRS:
+        if name not in attrs:
+            continue
+        value = attrs[name]
+        if name in SOURCE_BOOLEAN_ATTRS:
+            value = _required_boolean(value, f"SPH sidecar {name}")
+        h5.attrs[name] = value
+
+
+def _write_apply_bindings(
+    h5: Any,
+    *,
+    input_h5: Path,
+    input_h5_sha256: str,
+    sph_source: Path,
+    sph_source_sha256: str,
+    binding_mode: str,
+    sidecar_input_hash_verified: bool,
+) -> None:
+    h5.attrs["sph_apply_binding_schema"] = APPLY_BINDING_SCHEMA
+    h5.attrs["sph_apply_input_h5_path"] = str(input_h5.expanduser().resolve())
+    h5.attrs["sph_apply_input_h5_sha256"] = input_h5_sha256
+    h5.attrs["sph_apply_sidecar_path"] = str(sph_source.expanduser().resolve())
+    h5.attrs["sph_apply_sidecar_sha256"] = sph_source_sha256
+    h5.attrs["sph_apply_binding_mode"] = binding_mode
+    h5.attrs["sph_apply_sidecar_input_hash_verified"] = (
+        sidecar_input_hash_verified
+    )
+
+
+def _verify_bound_input_hash(attrs: dict[str, Any], input_h5_sha256: str) -> None:
+    recorded = _text_attr(attrs.get("sph_input_h5_sha256", "")).strip().lower()
+    if not recorded:
+        return
+    if not _is_sha256(recorded):
+        raise ValueError(
+            "SPH sidecar sph_input_h5_sha256 is not a well-formed SHA-256 digest"
+        )
+    if recorded != input_h5_sha256.lower():
+        raise ValueError(
+            "SPH sidecar is bound to a different input HDF5 SHA-256; "
+            "recompute the sidecar for this input"
+        )
 
 
 def _apply_to_mixture_group(group: Any, sph: np.ndarray) -> int:
@@ -417,6 +568,8 @@ def _apply_to_openmc_temperature_group(group: Any, sph: np.ndarray) -> int:
             _apply_sph_to_openmc_scatter_data(group["scatter_data"], sph),
         )
         scaled += 1
+    _replace_dataset(group, "applied_sph", sph)
+    _remove_sph_datasets(group)
     return scaled
 
 
@@ -500,6 +653,29 @@ def _text_attr(value: Any) -> str:
     return str(value)
 
 
+def _required_boolean(value: Any, label: str) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)) and int(value) in (0, 1):
+        return bool(value)
+    text = _text_attr(value).strip().lower()
+    if text in {"true", "1"}:
+        return True
+    if text in {"false", "0"}:
+        return False
+    raise ValueError(f"{label} must be an explicit boolean")
+
+
+def _is_sha256(value: str) -> bool:
+    if len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
 def _require_shape(actual: tuple[int, ...], expected: tuple[int, ...], label: str) -> None:
     if actual != expected:
         raise ValueError(f"{label} must have shape {expected}, got {actual}")
@@ -515,6 +691,57 @@ def _energy_groups(h5: Any) -> int:
     if groups <= 0:
         raise ValueError("energy group count must be positive")
     return groups
+
+
+def _require_supported_converter_state_layout(
+    h5: Any,
+    mixture_names: tuple[str, ...],
+) -> None:
+    mixtures = h5.get("mixtures")
+    if mixtures is None or not hasattr(mixtures, "keys"):
+        raise ValueError("input HDF5 must contain a /mixtures group")
+    for mixture_name in mixture_names:
+        if mixture_name not in mixtures:
+            raise ValueError(f"input HDF5 is missing declared mixture {mixture_name!r}")
+        mixture = mixtures[mixture_name]
+        if "states" not in mixture:
+            continue
+        states = mixture["states"]
+        if not hasattr(states, "keys"):
+            raise ValueError(f"mixture {mixture_name}: states must be an HDF5 group")
+        state_count = len(states)
+        if state_count != 1:
+            raise ValueError(
+                "apply-sph supports only one state per mixture until "
+                "state-specific SPH factors are available; "
+                f"mixture {mixture_name!r} has {state_count} states"
+            )
+
+
+def _require_supported_openmc_state_layout(
+    h5: Any,
+    macroscopic_names: tuple[str, ...],
+) -> None:
+    for macro_name in macroscopic_names:
+        temperatures = _openmc_temperature_names(h5[macro_name])
+        if len(temperatures) != 1:
+            raise ValueError(
+                "apply-sph supports only one OpenMC MG state/temperature per "
+                "macroscopic until state-specific SPH factors are available; "
+                f"{macro_name!r} has {len(temperatures)} states"
+            )
+
+
+def _openmc_temperature_names(group: Any) -> tuple[str, ...]:
+    return tuple(
+        str(name)
+        for name in group
+        if hasattr(group[name], "keys")
+        and (
+            "scatter_data" in group[name]
+            or any(dataset in group[name] for dataset in OPENMC_MGXS_VECTOR_DATASETS)
+        )
+    )
 
 
 def _openmc_macroscopic_names(h5: Any) -> tuple[str, ...]:

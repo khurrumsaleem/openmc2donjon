@@ -92,10 +92,10 @@ export const COMMAND_GOALS: readonly CommandGoalDefinition[] = [
   },
   {
     id: "openmc-sph",
-    eyebrow: "I need SPH factors",
-    title: "Carry OpenMC-side SPH to DONJON",
+    eyebrow: "I need fine-to-coarse SPH",
+    title: "Build the recommended OpenMC CE/MG correction",
     body:
-      "Use SPH factors generated from matched fine-reference OpenMC CE and homogenized-MG models on the same boundary and project-declared domain mapping, iterate them to convergence, then pre-apply the physically validated factors before Converter writes the requested object.",
+      "Use a heterogeneous fine-reference OpenMC CE model and a homogenized coarse-MG model on different geometries. Score CE tallies on the MG group boundaries and align state, boundary conditions, and fine-to-coarse domain mapping; iterate rate-preserving SPH, apply the converged factors, then enter Converter with the corrected HDF5.",
     href: "/equivalence?kind=openmc-sph-sidecar&contract=physical-sph",
     cta: "Open OpenMC SPH builder",
     actionHint:

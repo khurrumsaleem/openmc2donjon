@@ -12,11 +12,13 @@ transport either keeps 91 independent domains or pools tallies on 21 exact
 global D3 symmetry orbits while particles are being transported:
 
 ```text
-fine OpenMC CE 91-position full core
+heterogeneous OpenMC CE 91-position fine full core
   -> 91 independent domains or 21 exact D3 transport-time tally pools
-  -> Converter reference MACROLIB
-  -> native DRAGON SPH on the matching 91-position coarse geometry
-  -> corrected MACROLIB
+  -> conservative fine-to-coarse comparison-domain map
+  -> homogenized OpenMC MG full-core coarse solve
+  -> rate-preserving SPH update, XS / NSPH, and MG rerun to convergence
+  -> corrected MGXS HDF5
+  -> Converter + hash-linked receipt
   -> DONJON k-effective, leakage, and 91-position power verification
 ```
 
@@ -33,10 +35,15 @@ An accepted IRENA full-core handoff must satisfy all of the following:
 - The fine reference contains all 91 physical OpenMC CE positions with exact
   integrated flux, reaction rates, energy coverage, uncertainty, and boundary
   leakage evidence.
-- Converter preserves the declared 91-position or 21-orbit transport-time tally
-  mapping and writes the uncorrected reference MACROLIB before SPH.
-- DRAGON native `SPH:` converges on the matching project-declared full-core
-  geometry using SN or SPN as declared by that model.
+- The homogenized OpenMC MG geometry is a different coarse representation. It
+  uses the CE tally group boundaries and the same state and boundary
+  conditions as the CE problem,
+  and its comparison domains are connected to the fine model by a complete,
+  non-overlapping, volume/rate-conservative map.
+- The rate-preserving OpenMC CE/MG update converges on those comparison domains
+  before any formal handoff is accepted.
+- Converter validates the corrected HDF5, writes the declared
+  `L_MULTICOMPO` or `L_MACROLIB`, and records the hash-linked receipt.
 - Zero or unusable bins are rejected. Identity substitution, floors, frozen
   groups, clipping, and ADF are absent.
 - Converter rate balance and final DONJON eigenvalue both pass the predeclared
@@ -54,18 +61,63 @@ Earlier PNL/EXT and INT/EXT summaries had converged SPH fixed points but
 unconverged final transport solves, so they are retained only as negative
 evidence.
 
-## 2. Converter is the controlled boundary
+## 2. Static `(n,xn)` cross-section contract
 
-Converter first writes the uncorrected `L_MACROLIB` reference from the declared
-component HDF5. DRAGON then solves native SPH and writes the corrected NSPH
-MACROLIB consumed by DONJON. The Converter receipt identifies the exact
-reference input and object; `validate-native-sph` links that reference to the
-SPH and verification artifacts.
+IRENA uses the multiplicity-weighted fast-spectrum policy. Its OpenMC recipe
+must tally the following matched set; ordinary absorption is retained for its
+reaction-rate observable, while reduced absorption is the balance partner of
+the consistent nu-scatter matrix:
 
-The older OpenMC MG-side `apply-sph` route remains an optional diagnostic or
-alternate project method. It is not the primary IRENA production route.
+```python
+MGXS_TYPES = [
+    "total",
+    "absorption",
+    "reduced absorption",
+    "fission",
+    "kappa-fission",
+    "nu-fission",
+    "chi",
+    "consistent nu-scatter matrix",
+    "nu-transport",
+]
 
-## 3. Full-core DONJON model
+
+def scatter_mgxs_type():
+    return "consistent nu-scatter matrix"
+```
+
+Do not manually subtract `(n,2n)` or `(n,3n)` rates from absorption and do not
+edit scattering matrices in `main.py`, the recipe, or an HDF5 postprocessor.
+OpenMC constructs the paired `reduced absorption`,
+`consistent nu-scatter matrix`, and `nu-transport` MGXS estimators. The
+exporter preserves the set, and Converter serializes total plus the selected
+multiplicity-weighted scattering records.
+
+In the resulting static DONJON object, net absorption is implicit in `NTOT0`
+minus the outgoing P0 `SCAT` row. Consequently `(n,xn)` neutron multiplication
+is retained by the reduced-absorption/nu-scatter balance; Converter does not
+need a fitted correction or separate matrix rewrite. This is a static
+macroscopic transport handoff: it does **not** emit separate `N2N` or `N3N`
+depletion-reaction records. A depletion workflow requiring those reaction
+channels needs a separate, explicitly validated depletion-data contract.
+
+## 3. Converter is the controlled boundary
+
+The standard SPH iteration happens between the fixed OpenMC CE reference and
+the homogenized OpenMC MG coarse solve. After convergence, `apply-sph` folds
+the factors into the Converter-facing HDF5. Converter remains mandatory: it
+runs the production contract, writes the downstream object, and receipts its
+exact input and output. Neither a sidecar nor a terminating transport solve can
+bypass that boundary or establish physics acceptance.
+
+An advanced project may instead choose an external native DRAGON `SPH:` solve.
+That project-specific route must first use Converter to write and receipt an
+uncorrected reference `L_MACROLIB`; the external solver performs the iteration,
+and `validate-native-sph` audits the deck and artifacts. It is not the standard
+IRENA or product operator, and no native-DRAGON IRENA full-core result is
+accepted.
+
+## 4. Full-core DONJON model
 
 The IRENA full-core solve is a coarse transport model over 91 physical core
 positions (52 are fuel), not a 91-mixture fit and not 91 fuel assemblies. The
@@ -80,15 +132,18 @@ Full-core k-effective, leakage, and power shape are validation observables only.
 They may reveal that the coarse model is inadequate, but they may never be
 used to tune a global SPH coefficient.
 
-## 4. Historical evidence
+## 5. Historical evidence
 
 - `examples/irena30_sph_stage2_csd` records the earlier seven-assembly
   colorset experiments. Its identity/floor/freeze/clip prescriptions are
   archived and production-rejected; its reproduction runners are guarded and
   their summaries are permanently marked withdrawn diagnostics.
-- `examples/irena30_sph_stage3_fullcore` records the rejected full-core SPH
-  research line. Its sparse/fill/floor/frozen-group artifacts are not the
-  current full-core input.
+- `examples/irena30_sph_stage3_fullcore` records a rejected OpenMC-MG full-core
+  SPH research line. Its sparse/fill/floor/frozen-group artifacts are not an
+  accepted full-core input.
+- `examples/irena30_native_fullcore` records the advanced external-DRAGON
+  candidate and validator work. It remains useful implementation evidence, but
+  it is not the standard route and has no accepted IRENA full-core result.
 - `examples/irena30_zrefl_hex` remains useful converter/DONJON benchmark
   evidence. Its older 91-position representation does not prove an accepted
   five-component physical SPH model.

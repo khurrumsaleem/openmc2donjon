@@ -28,6 +28,9 @@ describe("navigation", () => {
       "DONJON",
     ]);
     expect(WORKFLOW_NAV_ITEMS.find((item) => item.label === "DONJON")?.description).toContain("user-defined");
+    const sph = WORKFLOW_NAV_ITEMS.find((item) => item.label === "SPH");
+    expect(sph?.description).toContain("heterogeneous OpenMC CE");
+    expect(sph?.description).toContain("homogenized MG coarse");
   });
 
   it("keeps secondary tools stable", () => {

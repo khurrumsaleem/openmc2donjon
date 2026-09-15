@@ -68,9 +68,9 @@ def scatter_mgxs_type():
 
     A DRAGON/DONJON MACROLIB has no separate OpenMC multiplicity-matrix
     channel in its deterministic scattering source.  Its SCAT records must
-    therefore contain the multiplicity-weighted transfer cross sections.
-    The consistent estimator also makes the P0 transfer balance with the
-    independently tallied total and absorption cross sections.
+    therefore contain the multiplicity-weighted transfer cross sections.  The
+    paired ``reduced absorption`` MGXS supplies the matching removal term for
+    the DRAGON ``NTOT0 - sum(SCAT0)`` balance.
     """
 
     return "consistent nu-scatter matrix"

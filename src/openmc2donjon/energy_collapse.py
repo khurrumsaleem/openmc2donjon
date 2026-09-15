@@ -19,6 +19,7 @@ VECTOR_XS = (
     "total",
     "transport_total",
     "absorption",
+    "reduced_absorption",
     "fission",
     "nu_fission",
     "kappa_fission",

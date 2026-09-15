@@ -2,7 +2,34 @@
 
 ## Unreleased
 
-Nothing yet.
+- Restored the standard physical-SPH workflow: heterogeneous OpenMC CE
+  reference -> homogenized OpenMC MG rate-preserving iteration -> corrected
+  HDF5 -> Converter -> downstream DONJON verification. Explicit conservative
+  comparison maps, source bindings, uncertainty evidence, and the declared
+  fixed-point criterion are required for physical acceptance. Native DRAGON
+  SPH remains an advanced external-solver option.
+- Made the static scattering convention explicit across export, preflight,
+  Inspect, and conversion receipts. Ordinary scattering pairs with absorption
+  and transport; multiplicity-weighted scattering pairs with reduced
+  absorption and nu-transport. Converter retains ordinary absorption as a
+  reaction-rate observable and does not synthesize separate N2N/N3N depletion
+  records. Unsupported matrix types, active OpenMC P0 diagonal corrections,
+  and mismatched declarations fail before export.
+- Preserved the declared balance term through group/mixture collapse and SPH
+  application. Transport consistency after `XS / NSPH` uses the corresponding
+  transformed check flux while retaining the original CE reference. Zero-flux
+  filling validates source/target conventions and commits file changes only
+  after all writes and provenance updates succeed.
+- Updated the recipe instructions to explain tallies generation and when an
+  existing OpenMC `main.py` needs integration. Local validation includes the
+  Python/frontend suites, portable release smoke, and a real five-group P1
+  Be-9 CE case with nonzero `(n,2n)`. This verifies static handoff behavior;
+  it does not establish a new IRENA full-core CE/MG-SPH/DONJON physics result.
+- Reclassified the current C5G7 fixture as ordinary
+  `consistent scatter matrix` plus `absorption` after auditing exact equality of
+  the saved statepoint's ordinary and nu-weighted P0 rates. Numerical HDF5
+  datasets are unchanged. The old statepoint predates the transport-complete
+  recipe and must be regenerated before current exporter parity can be claimed.
 
 ## v0.1.4-sph-rate - 2026-07-10
 
@@ -132,9 +159,9 @@ refresh for the uncertainty-preserving exporter.
   flux and checks exact payload equality.
 - Allowed flux-ratio ADF generation to handle nonpositive homogeneous
   denominator bins through the explicit `--invalid-fill` policy.
-- Restored C5G7 statepoint exporter parity by making the C5G7 recipe's
-  `consistent nu-scatter matrix` baseline compatibility choice explicit and
-  recording the same scatter provenance on the accepted HDF5 snapshot.
+- At this release, restored C5G7 statepoint exporter parity by making the
+  recipe's then-current `consistent nu-scatter matrix` compatibility choice
+  explicit. The current Unreleased contract supersedes that historical choice.
 - Added a current handoff snapshot for reviewers, covering capabilities,
   accepted C5G7 validation, release gates, known boundaries, and next physical
   work.

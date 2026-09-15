@@ -1,11 +1,12 @@
-"""IRENA local-signature CE/MG model for native DRAGON SPH.
+"""IRENA local-signature CE/MG model for an advanced native DRAGON SPH study.
 
 The model accepts a declared center and six ordered neighbors.  ``OUT`` slots
 are physical voids at the IRENA radial boundary; all remaining patch edges are
 artificial specular-reflective boundaries matching the DRAGON SNT ``ALBE 1``
 operator.  The legacy uniform-neighbor colorset names are
-still accepted for comparison, but production qualification uses the exact
-benchmark-specific signatures declared by ``irena30_native_fullcore``.
+still accepted for comparison, while this project-specific native research
+line uses the exact benchmark signatures declared by
+``irena30_native_fullcore``. It is not the standard OpenMC CE/MG SPH route.
 
 The assembly universes are reused from the IRENA workspace's colorset
 comparison infrastructure. Seven top-level node cells are placed with shared
@@ -91,6 +92,7 @@ MG_MACRO_HISTOGRAM_BINS = 16
 MGXS_TYPES = [
     "total",
     "absorption",
+    "reduced absorption",
     "fission",
     "kappa-fission",
     "nu-fission",
@@ -100,7 +102,7 @@ MGXS_TYPES = [
     "consistent scatter matrix",
     "consistent nu-scatter matrix",
     "multiplicity matrix",
-    "transport",
+    "nu-transport",
 ]
 VOLUME_FLUX_TALLY_NAME = "irena30_sph_stage2_volume_flux"
 ENERGY_COVERAGE_TALLY_NAME = "irena30_sph_stage2_energy_coverage"
@@ -684,7 +686,10 @@ def root_attrs() -> dict[str, object]:
             "active-to-OUT vacuum; artificial patch faces specular-reflective; "
             "active shared faces transmission; axial reflective"
             if "OUT" in NEIGHBOR_KINDS
-            else "artificial radial patch faces specular-reflective; active shared faces transmission; axial reflective"
+            else (
+                "artificial radial patch faces specular-reflective; "
+                "active shared faces transmission; axial reflective"
+            )
         ),
         "spatial_mapping": (
             "ordered center-plus-six-neighbor local signature; OUT slots are physical void"

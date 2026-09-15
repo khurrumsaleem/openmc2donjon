@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenmcWorkflowPlan } from "./api";
 import {
+  OPENMC_SPH_APPLY_FORM_HREF,
   OPENMC_SPH_SIDECAR_FORM_HREF,
   isFailedOpenmcSphSidecarCheck,
   openmcBundleBuilderHref,
@@ -270,6 +271,9 @@ describe("OpenMC workflow walkthrough", () => {
     expect(commands[2].cli).toContain("make-openmc-sph-sidecar");
     expect(OPENMC_SPH_SIDECAR_FORM_HREF).toBe(
       "/equivalence?kind=openmc-sph-sidecar&contract=physical-sph",
+    );
+    expect(OPENMC_SPH_APPLY_FORM_HREF).toBe(
+      "/equivalence?kind=apply-sph&contract=physical-sph",
     );
   });
 });

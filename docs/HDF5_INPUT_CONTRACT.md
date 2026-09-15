@@ -105,7 +105,7 @@ The three capability flags have deliberately different meanings:
 
 | Capability | Meaning |
 | --- | --- |
-| `reference_bound` | The frozen MGXS reference is tied to a verified recipe and real OpenMC statepoint by content hash. This is what downstream Converter/native DRAGON SPH needs. |
+| `reference_bound` | The frozen MGXS reference is tied to a verified recipe and real OpenMC statepoint by content hash. This is what the standard OpenMC CE/MG SPH workflow and any advanced external solver route need. |
 | `export_replayable` | The statepoint-to-MGXS export can be reconstructed from recorded source definitions and versions. |
 | `transport_reproducible` | The original OpenMC transport inputs, run controls, and used nuclear-data content are fully identified. This is the publication-level claim. |
 
@@ -120,11 +120,12 @@ generations-per-batch for eigenvalue runs, plus RNG seed and stride. MPI ranks
 and thread count are retained when a run receipt supplies them, but are
 reported as execution topology rather than substituted from the current shell.
 
-Native DRAGON SPH never reruns OpenMC and does not require the original local
-paths to remain present. It consumes the frozen reference HDF5 and its verified
-embedded digest. A managed run directory copies small model source files by
-default; large statepoints and nuclear-data libraries remain external but are
-hash-bound.
+The standard OpenMC CE/MG SPH workflow reruns the homogenized MG coarse model
+while holding the heterogeneous CE reference fixed. An advanced external
+native-DRAGON project does not rerun OpenMC; it consumes an uncorrected
+Converter reference MACROLIB and its receipt. In either case, a managed run
+directory copies small model source files by default, while large statepoints
+and nuclear-data libraries remain external but hash-bound.
 
 The converter writes DONJON `ENERGY` as `energy_bounds[::-1]`. Cross-section
 arrays are kept in OpenMC group-index order, which is high energy to low energy
@@ -149,7 +150,7 @@ Required datasets:
 | Dataset | Shape | DONJON field |
 | --- | --- | --- |
 | `total` | `(G,)` | `NTOT0` |
-| `absorption` | `(G,)` | used for balance checks and macrolib fields |
+| `absorption` | `(G,)` | ordinary OpenMC absorption reaction-rate observable; also the ordinary-scatter balance term |
 | `fission` | `(G,)` | `NFTOT` when the mixture is fissionable; exact zeros otherwise |
 | `nu_fission` | `(G,)` | `NUSIGF` when the mixture is fissionable; exact zeros otherwise |
 | `chi` | `(G,)` | `CHI` when the mixture is fissionable; exact zeros otherwise |
@@ -172,27 +173,39 @@ Recommended mixture attributes:
 | `scatter_format` | string | normally `legendre` |
 | `scatter_axes` | string | normally `moment,from,to` |
 | `volume` | float | spatial-domain volume; when present, strictly positive and finite |
+| `openmc_scatter_mgxs_type` | string | selected OpenMC scattering estimator: ordinary `scatter matrix` / `consistent scatter matrix`, or explicitly nu-weighted `nu-scatter matrix` / `consistent nu-scatter matrix` |
+| `openmc_scatter_multiplicity_weighted` | bool | whether the selected scattering matrix includes outgoing-neutron multiplicity |
+| `openmc_scatter_balance_dataset` | string | `absorption` for ordinary scattering; `reduced_absorption` for nu-weighted scattering |
+| `openmc_transport_mgxs_type` | string | OpenMC estimator used for `transport_total`: `transport` with ordinary scattering, or `nu-transport` with nu-weighted scattering |
 
 ## Optional Mixture Items
 
 | Dataset | Shape | DONJON field |
 | --- | --- | --- |
+| `reduced_absorption` | `(G,)` | fast-spectrum balance audit paired with multiplicity-weighted scattering; required when `openmc_scatter_balance_dataset=reduced_absorption` |
 | `transport_total` | `(G,)` | `STRD` |
 | `inverse_velocity`, `inverse-velocity`, `OVERV`, or `overv` | `(G,)` | `OVERV` |
 | `volume` | scalar | mixture volume |
 | `flux_weight`, `flux`, or `flux_integral` | `(G,)` | legacy Inspect-only data; Converter does not consume it |
 | `h_factor`, `H-FACTOR`, `H_FACTOR`, `kappa_fission`, `kappa_fission_xs`, or `kappa_fission_cross_section` | `(G,)` | `H-FACTOR` |
+| `sph`, `SPH`, or `NSPH` | `(G,)` | `NSPH` |
 
 All accepted inverse-velocity spellings must contain positive, finite values.
 All accepted H-factor spellings must contain non-negative, finite values. These
 are the same value-domain checks applied by Converter when it builds the
 DRAGON/DONJON object.
-| `sph`, `SPH`, or `NSPH` | `(G,)` | `NSPH` |
 
 If P1 or higher scattering is present, `transport_total` is required.  A bare
 P1 row sum is not the OpenMC `TransportXS` definition, so Converter does not
 silently derive `STRD` from the scattering matrix.  Export OpenMC's
-`transport` MGXS from the same calculation instead.
+matching `transport` MGXS for ordinary scattering, or `nu-transport` MGXS for
+nu-weighted scattering, from the same calculation instead. Exporter-written
+files declare that source in `openmc_transport_mgxs_type`. A nu-weighted file
+that contains `transport_total` without this declaration is rejected because
+an older ordinary `TransportXS` cannot be reinterpreted as `nu-transport`.
+For backward compatibility only, an ordinary-scatter file with
+`transport_total` but no transport-source attribute is interpreted as the
+ordinary `transport` estimator and reported as an undeclared legacy contract.
 
 When a calculation also carries a strictly positive, mixture-ordered
 `/openmc_volume_flux`, preflight can evaluate the diagnostic identity
@@ -208,11 +221,50 @@ diagnostic does not replace the explicit `transport_total` dataset and its
 uncertainty; it is not a row-sum reconstruction rule.  With P0-only
 scattering, absence of `transport_total` means `STRD` falls back to `NTOT0`.
 
+For a file declaring `sph_applied=true` and
+`sph_apply_operator="divide-xs-by-nsph"`, this diagnostic uses
+`flux_check = applied_sph * flux_CE`. The supported operator divides total,
+transport, and each incoming scattering row by its group factor, so this
+transformed check flux preserves the same identity. Preflight requires a
+finite, positive `applied_sph` vector for each checked calculation and rejects
+missing factors or an unsupported operator. It leaves the stored CE reference
+flux and cross sections unchanged. This is an algebraic consistency check;
+passing it does not establish that the SPH iteration physically converged.
+
 Converter writes `FLUX-INTG` only from the mixture-ordered root
 `/openmc_volume_flux` contract below. It does not infer a reference flux from
 the ambiguous calculation-local `flux_weight`, `flux`, or `flux_integral`
 names. Those legacy vectors remain visible in Inspect so existing files can be
 diagnosed without silently assigning them new physics semantics.
+
+### Absorption/scattering policy and `(n,xn)`
+
+The HDF5 contract supports two static, physically paired policies:
+
+| Policy | HDF5/OpenMC source pair | Transport estimator | Balance term |
+| --- | --- | --- | --- |
+| Ordinary | `absorption` + ordinary `scatter matrix` or `consistent scatter matrix` | `transport` | `absorption` |
+| Multiplicity-weighted fast spectrum | `absorption` + `reduced_absorption` + `consistent nu-scatter matrix` | `nu-transport` | `reduced_absorption` |
+
+The required `absorption` dataset remains present in the second policy as the
+ordinary absorption reaction-rate observable. It is not the removal term to
+pair with nu-weighted scattering. Recipe/statepoint export records the selected
+scatter type, whether it is multiplicity-weighted, its paired transport
+estimator, and the matching balance dataset in the attributes above. A declared nu-weighted matrix without
+`reduced_absorption` is invalid; the exporter does not silently manufacture the
+missing estimator.
+
+The word `consistent` identifies OpenMC's estimator construction; by itself it
+does not imply neutron multiplicity. Only a type containing `nu-scatter` is the
+multiplicity-weighted policy and therefore requires `reduced_absorption`.
+
+Converter does not ask users to edit an absorption vector or scatter matrix.
+It writes `total` as `NTOT0` and the selected matrix as DONJON `SCAT`/`SIGS`;
+DONJON's static net absorption is consequently implicit in `NTOT0` minus the
+outgoing P0 scattering row. With the fast-spectrum pair, this retains neutron
+multiplication from `(n,xn)` consistently. The static HDF5-to-MACROLIB or
+MULTICOMPO route does not emit separate `N2N` or `N3N` depletion-reaction
+records.
 
 ## Optional Statistical Uncertainty Datasets
 
@@ -230,8 +282,8 @@ with the same shape:
 The OpenMC exporter writes these datasets when the source MGXS object exposes
 standard-deviation data, either through a `std_dev`/`stddev`/`std` attribute or
 through `get_xs(value="std_dev")`. This applies to `total`, `absorption`,
-`fission`, `kappa_fission`, `nu_fission`, `chi`, `transport_total`,
-`inverse_velocity`, and `scatter_matrix`.
+`reduced_absorption`, `fission`, `kappa_fission`, `nu_fission`, `chi`,
+`transport_total`, `inverse_velocity`, and `scatter_matrix`.
 
 `openmc2donjon-from-openmc --summary-json` records two coverage counters:
 
@@ -273,9 +325,13 @@ non-fissionable mixtures are excluded from the expected coverage count.
 
 ## Optional OpenMC CE Reference-Flux Uncertainty
 
-OpenMC-side SPH compares an OpenMC CE reference flux against an OpenMC MG macro
-flux on the same geometry. When that CE reference flux is stored in an HDF5
-dataset, it may also carry a sibling standard-deviation dataset:
+OpenMC-side SPH compares a heterogeneous OpenMC CE reference flux against a
+homogenized OpenMC MG coarse flux. The geometries differ, so both arrays must
+be projected onto the same declared comparison-domain ordering using a
+complete, non-overlapping, conservative fine-to-coarse map. Energy groups,
+physical state, and boundary conditions must also agree. When the CE reference
+flux is stored in an HDF5 dataset, it may carry a sibling standard-deviation
+dataset:
 
 ```text
 /openmc_volume_flux
@@ -377,6 +433,11 @@ openmc2donjon augment-sph mgxs_library.h5 \
 openmc2donjon check mgxs_with_sph.h5 --require-sph
 ```
 
+This example demonstrates payload carriage only. The standard physical route
+iterates `apply-sph --input-format openmc-mgxs`, applies the converged factors
+to the Converter-facing HDF5, and then converts with
+`--require-physical-sph`.
+
 ## Experimental Multi-State Burnup Axis
 
 The production validation line is still one state point by default. The
@@ -422,16 +483,18 @@ instead of silently ignoring them.
 ## Scatter Row-Balance Check
 
 For production handoffs, the preflight validator can check the P0 removal
-balance in every mixture and state:
+balance in every mixture and state. Let `balance_absorption` be `absorption` for
+ordinary scattering or `reduced_absorption` for declared nu-weighted
+scattering:
 
 ```text
-residual[g] = total[g] - absorption[g] - sum_to(scatter_P0[g, to])
+residual[g] = total[g] - balance_absorption[g] - sum_to(scatter_P0[g, to])
 relative[g] = abs(residual[g]) / max(abs(total[g]), 1e-30)
 ```
 
-This catches common handoff mistakes such as exporting a nu-scatter matrix as
-ordinary scattering, transposing scattering axes, or carrying too much Monte
-Carlo noise in low-statistics MGXS tallies.
+This catches common handoff mistakes such as mixing ordinary absorption with a
+nu-weighted scatter matrix, omitting reduced absorption, transposing scattering
+axes, or carrying too much Monte Carlo noise in low-statistics MGXS tallies.
 
 Example:
 

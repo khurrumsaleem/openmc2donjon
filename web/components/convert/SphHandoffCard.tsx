@@ -19,15 +19,15 @@ export default function SphHandoffCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-[10px] uppercase tracking-[0.14em] opacity-70">
-            OpenMC-side SPH delivery
+            OpenMC CE/MG SPH delivery
           </div>
           <h2 className="mt-1 text-base font-semibold tracking-tight">
             {status.title}
           </h2>
           <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[var(--fg-2)]">
-            This converter step does not recompute SPH. It verifies the
-            SPH-augmented OpenMC handoff and writes the DONJON-facing ASCII
-            object.
+            This formal Converter step does not recompute SPH. It verifies the
+            corrected SPH-applied handoff, or an explicitly declared factor-bearing
+            handoff, and writes the DONJON-facing ASCII object.
           </p>
         </div>
         <span className="rounded border border-current/25 px-2 py-1 text-[10px] uppercase tracking-[0.14em]">
@@ -62,4 +62,3 @@ function cardClass(status: ConvertSphHandoffStatus): string {
   }
   return "border-amber-300/25 bg-amber-300/[0.055] text-amber-100";
 }
-

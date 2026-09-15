@@ -48,16 +48,19 @@ It contains:
 | DONJON 2-group ADF smoke | `1.18533289` |
 | DONJON 2-group NODF smoke | `1.20179343` |
 
-The OpenMC statepoint exporter reproduces the accepted HDF5 fields with:
+The accepted snapshot now declares OpenMC's ordinary
+`consistent scatter matrix` paired with `absorption`. An audit of the saved
+source statepoint found its ordinary and nu-weighted P0 scattering
+reaction-rate tallies identical in all 441 bins, so this thermal C5G7 fixture
+does not exercise an `(n,xn)` multiplicity handoff. Its numerical HDF5 datasets
+remain unchanged; only the explicit scattering-contract metadata was corrected.
 
-```text
-max_abs_diff = 0.0
-```
-
-This C5G7 recipe intentionally selects OpenMC's
-`consistent nu-scatter matrix` MGXS as an explicit locked-baseline
-compatibility choice. The generic user recipe template remains on ordinary
-`scatter matrix`.
+The saved source statepoint predates the current transport-complete C5G7 recipe.
+It does not contain the complete tally set now required, including an explicit
+OpenMC `TransportXS`, and therefore cannot directly reproduce the accepted HDF5
+through the current exporter. Generate `tallies.xml` with the current recipe,
+rerun OpenMC, and use that new statepoint before claiming exporter parity. No P1
+row-sum reconstruction is an acceptable substitute.
 
 ## Reproduction
 
@@ -75,8 +78,9 @@ bash scripts/release_check.sh --run-donjon
 
 The full check covers package tests, CLI smoke, C5G7 converter readback,
 accepted baseline validation, C5G7 DONJON face-flux regeneration when local
-dumps are available, OpenMC statepoint exporter parity, and DONJON locked
-decks.
+dumps are available, and DONJON locked decks. Direct parity regeneration from
+the saved C5G7 statepoint is intentionally not claimed until a new statepoint
+has been produced with the current transport-complete recipe.
 
 ## Scope
 

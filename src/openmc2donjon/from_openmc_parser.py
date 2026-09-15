@@ -83,7 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "explicit OpenMC MGXS type to export as DONJON scattering. "
-            "Default accepts only ordinary 'scatter matrix'."
+            "Default accepts only ordinary 'scatter matrix'; an explicit "
+            "nu-scatter type also requires 'reduced absorption' and, when "
+            "TransportXS is used, the matching 'nu-transport'."
         ),
     )
     parser.add_argument(
@@ -463,8 +465,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="REL",
         help=(
-            "with --check, warn if max |total - absorption - sum(P0 scatter out)| "
-            "/ |total| exceeds REL"
+            "with --check, warn if the maximum relative row residual for the "
+            "declared scatter/removal pair (absorption or reduced_absorption) "
+            "exceeds REL"
         ),
     )
     parser.add_argument(
@@ -473,8 +476,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="REL",
         help=(
-            "with --check, fail if max |total - absorption - sum(P0 scatter out)| "
-            "/ |total| exceeds REL"
+            "with --check, fail if the maximum relative row residual for the "
+            "declared scatter/removal pair (absorption or reduced_absorption) "
+            "exceeds REL"
         ),
     )
     parser.add_argument(

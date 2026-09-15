@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ "${ALLOW_REJECTED_FULLCORE_SPH:-0}" != "1" ]]; then
   echo "This archived OpenMC-MG-side full-core SPH research line has no accepted result." >&2
-  echo "Use the 91-position/21-D3-orbit Converter -> native DRAGON SPH route for the current IRENA candidate." >&2
+  echo "Use the standard CE-fine -> MG-coarse rate-SPH -> Converter route for the next IRENA candidate." >&2
   echo "Set ALLOW_REJECTED_FULLCORE_SPH=1 only to continue the rejected research calculation." >&2
   exit 2
 fi

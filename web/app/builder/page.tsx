@@ -18,6 +18,7 @@ import {
   BuilderValues,
   COMMAND_BUILDER_SPECS,
   builderCliIssues,
+  builderFieldIsRequired,
   builderValuesFromQuery,
   buildCommandCli,
   commandBuilderSpec,
@@ -281,6 +282,7 @@ function BuilderForm({ commandId }: { commandId: string }) {
                     key={field.name}
                     field={field}
                     value={values[field.name]}
+                    required={builderFieldIsRequired(field, values)}
                     onChange={(value) => patch(field.name, value)}
                     onBrowse={
                       field.kind === "path" && field.browse
@@ -299,7 +301,12 @@ function BuilderForm({ commandId }: { commandId: string }) {
                       Copy this exact command into your shell.
                     </p>
                   </div>
-                  <CopyCliButton value={cli} compact />
+                  <CopyCliButton
+                    value={cli}
+                    label={cliIssues.length > 0 ? "HOLD" : "Copy CLI"}
+                    compact
+                    disabled={cliIssues.length > 0}
+                  />
                 </div>
                 <pre className="mt-3 overflow-x-auto rounded-md border border-[var(--edge)] bg-black/25 px-3 py-2 text-[12px] text-[var(--fg-1)]">
                   {cli}
@@ -416,11 +423,13 @@ function BundlePrefillPanel({
 function BuilderFieldControl({
   field,
   value,
+  required,
   onChange,
   onBrowse,
 }: {
   field: BuilderField;
   value: string | boolean | undefined;
+  required: boolean;
   onChange: (value: string | boolean) => void;
   onBrowse?: () => void;
 }) {
@@ -430,7 +439,7 @@ function BuilderFieldControl({
       <span className="flex items-center justify-between gap-3">
         <span className="text-sm font-semibold tracking-tight">
           {field.label}
-          {field.required ? <span className="text-emerald-300"> *</span> : null}
+          {required ? <span className="text-emerald-300"> *</span> : null}
         </span>
         {field.flag ? (
           <code className="font-mono text-[10px] text-[var(--fg-3)]">{field.flag}</code>

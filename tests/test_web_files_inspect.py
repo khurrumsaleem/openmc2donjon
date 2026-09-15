@@ -290,6 +290,15 @@ class InspectEndpointTests(unittest.TestCase):
             self.assertEqual(payload["std_dev_expected_datasets"], 14)
             self.assertIsNotNone(payload["mesh_match"])
             self.assertEqual(payload["mesh_match"]["id"], "casmo_7")
+            self.assertIsNone(payload["openmc_scatter_mgxs_type"])
+            self.assertFalse(payload["openmc_scatter_multiplicity_weighted"])
+            self.assertEqual(
+                payload["openmc_scatter_balance_dataset"], "absorption"
+            )
+            self.assertFalse(payload["openmc_scatter_contract_declared"])
+            self.assertTrue(payload["openmc_scatter_contract_valid"])
+            self.assertEqual(payload["openmc_transport_mgxs_type"], "transport")
+            self.assertFalse(payload["openmc_transport_contract_declared"])
             self.assertIsNotNone(payload["production_audit"])
             self.assertFalse(payload["production_audit"]["ok"])
             mixture_names = sorted(m["name"] for m in payload["mixtures"])
@@ -390,6 +399,7 @@ class InspectEndpointTests(unittest.TestCase):
                     "total",
                     "transport_total",
                     "absorption",
+                    "reduced_absorption",
                     "fission",
                     "nu_fission",
                     "chi",
@@ -405,6 +415,97 @@ class InspectEndpointTests(unittest.TestCase):
                     for value in payload["cross_section_std_dev"].values()
                 )
             )
+
+    def test_live_mode_surfaces_nu_scatter_reduced_absorption_pair(self) -> None:
+        import h5py
+        import numpy as np
+
+        from openmc2donjon.web.server import create_app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nu_scatter.h5"
+            _write_fake_hdf5(path)
+            reduced = np.asarray([-0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07])
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = (
+                    "consistent nu-scatter matrix"
+                )
+                h5.attrs["openmc_scatter_multiplicity_weighted"] = True
+                h5.attrs["openmc_scatter_balance_dataset"] = (
+                    "reduced_absorption"
+                )
+                h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                h5["mixtures/M1_UO2"].create_dataset(
+                    "reduced_absorption", data=reduced
+                )
+                h5["mixtures/M2_MOD"].create_dataset(
+                    "reduced_absorption", data=np.full(7, 0.02)
+                )
+                h5["mixtures/M1_UO2"].create_dataset(
+                    "reduced_absorption_std_dev", data=np.full(7, 0.002)
+                )
+
+            client = TestClient(create_app(mock_mode=False))
+            summary = client.get("/api/inspect", params={"path": str(path)})
+            detail = client.get(
+                "/api/inspect/mixture",
+                params={"path": str(path), "mixture": "M1_UO2"},
+            )
+
+        self.assertEqual(summary.status_code, 200, summary.text)
+        contract = summary.json()
+        self.assertEqual(
+            contract["openmc_scatter_mgxs_type"],
+            "consistent nu-scatter matrix",
+        )
+        self.assertTrue(contract["openmc_scatter_multiplicity_weighted"])
+        self.assertEqual(
+            contract["openmc_scatter_balance_dataset"], "reduced_absorption"
+        )
+        self.assertTrue(contract["openmc_scatter_contract_declared"])
+        self.assertTrue(contract["openmc_scatter_contract_valid"])
+        self.assertEqual(contract["openmc_transport_mgxs_type"], "nu-transport")
+        self.assertTrue(contract["openmc_transport_contract_declared"])
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertEqual(
+            detail.json()["cross_sections"]["reduced_absorption"],
+            reduced.tolist(),
+        )
+        self.assertEqual(
+            detail.json()["cross_section_std_dev"]["reduced_absorption"],
+            [0.002] * 7,
+        )
+
+    def test_live_mode_uses_canonical_audit_for_conflicting_scatter_scopes(
+        self,
+    ) -> None:
+        import h5py
+
+        from openmc2donjon.web.server import create_app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "conflicting_scatter.h5"
+            _write_fake_hdf5(path)
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = "scatter matrix"
+                h5["mixtures/M1_UO2"].attrs["openmc_scatter_mgxs_type"] = (
+                    "consistent nu-scatter matrix"
+                )
+
+            payload = (
+                TestClient(create_app(mock_mode=False))
+                .get("/api/inspect", params={"path": str(path)})
+                .json()
+            )
+
+        self.assertFalse(payload["openmc_scatter_contract_valid"])
+        self.assertFalse(payload["production_audit"]["openmc_scatter_contract_valid"])
+        self.assertTrue(
+            any(
+                "contradictory inherited openmc_scatter_mgxs_type" in issue
+                for issue in payload["production_audit"]["issues"]
+            )
+        )
 
     def test_live_mode_multistate_detail_selects_state_and_full_physics(
         self,

@@ -1,6 +1,10 @@
 import Link from "next/link";
 import ConverterQuickStart from "@/components/ConverterQuickStart";
-import { HOME_FLOW, HOME_HERO } from "@/lib/homeHero";
+import {
+  HOME_EQUIVALENCE_FLOW,
+  HOME_HANDOFF_FLOW,
+  HOME_HERO,
+} from "@/lib/homeHero";
 
 export default function Home() {
   return (
@@ -42,13 +46,13 @@ function ProductArchitecture() {
         <div>
           <p className="page-kicker">Product architecture</p>
           <h2 className="mt-1 text-2xl font-bold tracking-[-0.03em]">
-            One Converter boundary, optional workflows around it
+            Correct the physics first; hand off through Converter
           </h2>
         </div>
         <p className="max-w-xl text-[12px] leading-5 text-[var(--fg-3)]">
-          Prepare inputs, run equivalence, coordinate components, or calculate
-          downstream only when the model requires it. Every formal handoff still
-          passes through the same checked Converter.
+          If equivalence is required, converge and apply SPH before Converter.
+          A handoff that is already corrected can start directly at the same
+          checked Converter boundary.
         </p>
       </div>
 
@@ -58,25 +62,27 @@ function ProductArchitecture() {
         </div>
 
         <div className="md:col-start-1 md:row-start-2 xl:col-start-1 xl:row-start-1">
-          <ArchitectureCard eyebrow="Optional preparation" title="Prepare the reference">
-            <ArchitectureLink href="/openmc" label="OpenMC MGXS" body="Export the groups, domains, moments, and uncertainties required by your model." />
+          <ArchitectureCard eyebrow="Upstream preparation" title="Prepare the corrected HDF5">
+            <ArchitectureLink href="/openmc" label="OpenMC CE + MG inputs" body="Prepare the heterogeneous fine reference and homogenized coarse model with aligned groups, state, boundaries, and domain mapping." />
+            <ArchitectureLink href="/equivalence" label="Recommended CE/MG SPH" body="Iterate the rate-preserving update, then apply converged factors to write the corrected HDF5." />
             <div className="rounded-xl border border-[var(--edge)] bg-black/10 p-3 text-[10px] leading-4 text-[var(--fg-3)]">
-              If a converter-ready HDF5 already exists, start directly with Converter. OpenMC MG mode is not required for native DRAGON SPH.
+              If a corrected, Converter-ready HDF5 already exists, start directly
+              with Converter.
             </div>
           </ArchitectureCard>
         </div>
 
         <div className="md:col-start-2 md:row-start-2 xl:col-start-3 xl:row-start-1">
           <ArchitectureCard
-            eyebrow="Optional physics & downstream"
-            title="SPH when needed; DONJON downstream"
+            eyebrow="Output & downstream"
+            title="Deliver and validate downstream"
           >
             <div className="rounded-xl border border-[var(--edge)] bg-black/10 p-3">
               <p className="font-mono text-[10px] text-[var(--accent)]">OUTPUT</p>
               <p className="mt-1 text-[12px] font-bold">L_MULTICOMPO or L_MACROLIB</p>
               <p className="mt-1 text-[10px] leading-4 text-[var(--fg-3)]">Checked ASCII/LCM object plus exact Converter receipt.</p>
             </div>
-            <ArchitectureLink href="/equivalence" label="Native DRAGON SPH" body="Use Converter reference rates on the project-declared coarse geometry; no ADF or fitted global coefficient." />
+            <ArchitectureLink href="/equivalence?route=native&contract=native-sph" label="Advanced: native DRAGON SPH" body="Retain this separate path only for an explicitly declared project-specific coarse-model contract." />
             <ArchitectureLink href="/donjon" label="DONJON use and validation" body="Consume the corrected object in a component or full-core model with its own mapping and acceptance criteria." />
           </ArchitectureCard>
         </div>
@@ -110,7 +116,7 @@ function StartingPoints() {
       id: "openmc",
       label: "I have a recipe or statepoint",
       title: "Prepare OpenMC MGXS",
-      body: "Create the HDF5 handoff first, then bring it to Converter.",
+      body: "Prepare the OpenMC artifacts. If equivalence is required, continue through CE/MG SPH and apply the factors before Converter.",
       href: "/openmc",
       cta: "Open OpenMC MGXS",
     },
@@ -126,7 +132,7 @@ function StartingPoints() {
       id: "sph",
       label: "My coarse model needs equivalence",
       title: "Compute and apply SPH",
-      body: "Use the fine OpenMC reference, Converter output, and your declared DRAGON/DONJON coarse model. OpenMC MG remains optional.",
+      body: "Compare a heterogeneous OpenMC CE fine reference with a homogenized OpenMC MG coarse model. Score CE tallies on the MG group boundaries and align state, boundary conditions, and domain mapping; converge rate-preserving SPH, write the corrected HDF5, then enter Converter.",
       href: "/equivalence",
       cta: "Open SPH",
     },
@@ -166,38 +172,56 @@ function StartingPoints() {
 }
 
 function ProductFlow() {
-  const handoffStages = HOME_FLOW.slice(0, 3);
-  const optionalStage = HOME_FLOW[3];
-
   return (
     <section aria-labelledby="home-product-flow-title" className="mt-6 max-w-[54rem]">
       <h2 id="home-product-flow-title" className="sr-only">Product flow</h2>
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_1.25rem_minmax(0,0.86fr)_1.25rem_minmax(0,1.15fr)] sm:items-center">
-        {handoffStages.map((stage, index) => (
+      <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.11em] text-[var(--fg-3)]">
+        Conditional physics · when fine-to-coarse equivalence is required
+      </div>
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_1.25rem_minmax(0,1fr)_1.25rem_minmax(0,1fr)] sm:items-center">
+        {HOME_EQUIVALENCE_FLOW.map((stage, index) => (
           <div key={stage.label} className="contents">
             {index > 0 ? <StageArrow /> : null}
             <FlowStage
               label={stage.label}
               qualifier={stage.qualifier}
-              tone={stage.label === "Converter" ? "required" : index === 2 ? "output" : "neutral"}
+              tone={
+                stage.label === "Rate-preserving SPH"
+                  ? "optional"
+                  : stage.label === "Corrected / Converter-ready HDF5"
+                      ? "output"
+                      : "neutral"
+              }
             />
           </div>
         ))}
       </div>
 
-      <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-        <span aria-hidden="true" className="hidden h-px flex-1 bg-gradient-to-r from-transparent via-[var(--edge-bright)] to-[var(--edge-bright)] sm:block" />
-        <span className="text-center text-[10px] font-bold uppercase tracking-[0.11em] text-[var(--fg-3)]">
-          Optional workflows · only when required
-        </span>
-        <StageArrow />
-        <FlowStage
-          label={optionalStage.label}
-          qualifier={optionalStage.qualifier}
-          tone="optional"
-          className="sm:min-w-[17rem]"
-        />
+      <div className="mb-2 mt-5 text-[10px] font-bold uppercase tracking-[0.11em] text-emerald-200/80">
+        Formal handoff · every production delivery
       </div>
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_1.25rem_minmax(0,0.78fr)_1.25rem_minmax(0,1.18fr)_1.25rem_minmax(0,0.7fr)] sm:items-center">
+        {HOME_HANDOFF_FLOW.map((stage, index) => (
+          <div key={stage.label} className="contents">
+            {index > 0 ? <StageArrow /> : null}
+            <FlowStage
+              label={stage.label}
+              qualifier={stage.qualifier}
+              tone={
+                stage.label === "Converter"
+                  ? "required"
+                  : stage.label === "L_MULTICOMPO / L_MACROLIB"
+                    ? "output"
+                    : "neutral"
+              }
+            />
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[10px] leading-4 text-[var(--fg-3)]">
+        Direct-conversion users can skip the first row only when their HDF5 is
+        already Converter-ready, including any required upstream SPH correction.
+      </p>
     </section>
   );
 }

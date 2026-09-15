@@ -384,9 +384,319 @@ class MgxsInputContractTests(unittest.TestCase):
             )
 
         self.assertFalse(report.ok)
-        self.assertTrue(
-            any("exceeds fail threshold" in item for item in report.issues)
+        self.assertTrue(any("exceeds fail threshold" in item for item in report.issues))
+
+    def test_nu_scatter_row_balance_uses_inherited_reduced_absorption(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "nu_scatter_balanced.h5"
+            write_multistate_fixture(path)
+            with h5py.File(path, "a") as h5:
+                fuel = h5["mixtures/fuel"]
+                fuel.attrs["openmc_scatter_mgxs_type"] = "consistent nu-scatter matrix"
+                fuel.attrs["openmc_scatter_multiplicity_weighted"] = True
+                fuel.attrs["openmc_scatter_balance_dataset"] = "reduced_absorption"
+                fuel.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                fuel["states/00000001/total"][:] = np.array([0.2, 0.38])
+                for state in fuel["states"].values():
+                    total = np.asarray(state["total"][:], dtype=float)
+                    scatter = np.asarray(state["scatter_matrix"][0], dtype=float)
+                    state.create_dataset(
+                        "reduced_absorption",
+                        data=total - scatter.sum(axis=1),
+                    )
+
+            report = validator.validate_input(
+                path,
+                scatter_row_balance_fail=1.0e-12,
+            )
+
+        self.assertTrue(report.ok, report.issues)
+        self.assertTrue(report.scatter_row_balance_checked)
+        self.assertLess(float(report.scatter_row_balance_max_rel or 0.0), 1.0e-15)
+        self.assertEqual(
+            report.openmc_scatter_mgxs_type, "consistent nu-scatter matrix"
         )
+        self.assertTrue(report.openmc_scatter_multiplicity_weighted)
+        self.assertEqual(
+            report.openmc_scatter_balance_dataset, "reduced_absorption"
+        )
+        self.assertTrue(report.openmc_scatter_contract_declared)
+        self.assertTrue(report.openmc_scatter_contract_valid)
+        self.assertEqual(report.openmc_transport_mgxs_type, "nu-transport")
+        self.assertTrue(report.openmc_transport_contract_declared)
+
+    def test_canonical_nu_scatter_metadata_without_type_is_honored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "canonical_nu_scatter.h5"
+            write_single_state_fixture(path, total=[0.2, 0.38])
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_multiplicity_weighted"] = True
+                h5.attrs["openmc_scatter_balance_dataset"] = "reduced_absorption"
+                h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                h5["mixtures/fuel"].create_dataset(
+                    "reduced_absorption",
+                    data=np.array([-0.04, 0.08]),
+                )
+
+            report = validator.validate_input(
+                path,
+                scatter_row_balance_fail=1.0e-12,
+            )
+
+        self.assertTrue(report.ok, report.issues)
+        self.assertIsNone(report.openmc_scatter_mgxs_type)
+        self.assertTrue(report.openmc_scatter_multiplicity_weighted)
+        self.assertEqual(
+            report.openmc_scatter_balance_dataset, "reduced_absorption"
+        )
+        self.assertTrue(report.openmc_scatter_contract_declared)
+        self.assertTrue(report.openmc_scatter_contract_valid)
+        self.assertEqual(report.openmc_transport_mgxs_type, "nu-transport")
+        self.assertTrue(report.openmc_transport_contract_declared)
+
+    def test_nu_scatter_transport_total_requires_declared_nu_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "nu_scatter_missing_transport_contract.h5"
+            write_single_state_fixture(path, total=[0.2, 0.38])
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = "nu-scatter matrix"
+                h5["mixtures/fuel"].create_dataset(
+                    "reduced_absorption",
+                    data=np.array([-0.04, 0.08]),
+                )
+
+            report = validator.validate_input(path)
+
+        self.assertFalse(report.ok)
+        self.assertFalse(report.openmc_transport_contract_declared)
+        self.assertTrue(
+            any(
+                "requires an explicit openmc_transport_mgxs_type='nu-transport'"
+                in issue
+                for issue in report.issues
+            ),
+            report.issues,
+        )
+
+    def test_nu_scatter_rejects_ordinary_transport_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "nu_scatter_ordinary_transport.h5"
+            write_single_state_fixture(path, total=[0.2, 0.38])
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = "nu-scatter matrix"
+                h5.attrs["openmc_transport_mgxs_type"] = "transport"
+                h5["mixtures/fuel"].create_dataset(
+                    "reduced_absorption",
+                    data=np.array([-0.04, 0.08]),
+                )
+
+            report = validator.validate_input(path)
+
+        self.assertFalse(report.ok)
+        self.assertTrue(
+            any(
+                "openmc_transport_mgxs_type 'transport' contradicts" in issue
+                and "expected 'nu-transport'" in issue
+                for issue in report.issues
+            ),
+            report.issues,
+        )
+
+    def test_conflicting_inherited_transport_contract_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "conflicting_transport_contract.h5"
+            write_single_state_fixture(path, total=[0.2, 0.38])
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = "nu-scatter matrix"
+                h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                fuel = h5["mixtures/fuel"]
+                fuel.attrs["openmc_transport_mgxs_type"] = "transport"
+                fuel.create_dataset(
+                    "reduced_absorption",
+                    data=np.array([-0.04, 0.08]),
+                )
+
+            report = validator.validate_input(path)
+
+        self.assertFalse(report.ok)
+        self.assertTrue(
+            any(
+                "contradictory inherited openmc_transport_mgxs_type"
+                in issue
+                for issue in report.issues
+            ),
+            report.issues,
+        )
+
+    def test_contradictory_scatter_contract_metadata_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "contradictory_scatter_contract.h5"
+            write_single_state_fixture(path, total=[0.29, 0.38])
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = "nu-scatter matrix"
+                h5.attrs["openmc_scatter_multiplicity_weighted"] = False
+                h5.attrs["openmc_scatter_balance_dataset"] = "reduced_absorption"
+                h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                h5["mixtures/fuel"].create_dataset(
+                    "reduced_absorption",
+                    data=np.array([0.05, 0.08]),
+                )
+
+            report = validator.validate_input(path)
+
+        self.assertFalse(report.ok)
+        self.assertTrue(report.openmc_scatter_contract_declared)
+        self.assertFalse(report.openmc_scatter_contract_valid)
+        self.assertTrue(
+            any(
+                "openmc_scatter_multiplicity_weighted contradicts" in issue
+                for issue in report.issues
+            ),
+            report.issues,
+        )
+
+    def test_reduced_absorption_vector_and_std_dev_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            valid = Path(tmpdir) / "valid_reduced_absorption.h5"
+            invalid = Path(tmpdir) / "invalid_reduced_absorption.h5"
+            for path in (valid, invalid):
+                write_single_state_fixture(path, total=[0.2, 0.38])
+                with h5py.File(path, "a") as h5:
+                    h5.attrs["openmc_scatter_mgxs_type"] = "nu-scatter matrix"
+                    h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                    fuel = h5["mixtures/fuel"]
+                    fuel.create_dataset(
+                        "reduced_absorption",
+                        data=np.array([-0.04, 0.08]),
+                    )
+                    fuel.create_dataset(
+                        "reduced_absorption_std_dev",
+                        data=(
+                            np.array([0.001, 0.002])
+                            if path == valid
+                            else np.array([0.001])
+                        ),
+                    )
+
+            valid_report = validator.validate_input(
+                valid,
+                scatter_row_balance_fail=1.0e-12,
+            )
+            invalid_report = validator.validate_input(
+                invalid,
+                scatter_row_balance_fail=1.0e-12,
+            )
+
+        self.assertTrue(valid_report.ok, valid_report.issues)
+        self.assertEqual(valid_report.uncertainty_expected_datasets, 8)
+        self.assertEqual(valid_report.uncertainty_datasets, 1)
+        self.assertFalse(invalid_report.ok)
+        self.assertTrue(
+            any(
+                "reduced_absorption_std_dev shape" in issue
+                for issue in invalid_report.issues
+            ),
+            invalid_report.issues,
+        )
+
+    def test_nu_scatter_requires_reduced_absorption_for_all_preflight_modes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "nu_scatter_missing_reduced_absorption.h5"
+            write_single_state_fixture(path, total=[0.29, 0.38])
+            append_production_metadata(path)
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = "nu-scatter matrix"
+                h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+
+            plain = validator.validate_input(path)
+            checked = validator.validate_input(
+                path,
+                scatter_row_balance_fail=1.0e-12,
+            )
+            production = validator.validate_production_input(path)
+
+        for report in (plain, checked, production):
+            with self.subTest(report=report):
+                self.assertFalse(report.ok)
+                self.assertTrue(
+                    any(
+                        "requires a finite reduced_absorption vector" in issue
+                        and "dataset is missing" in issue
+                        for issue in report.issues
+                    ),
+                    report.issues,
+                )
+                self.assertIsNone(report.scatter_row_balance_max_rel)
+                self.assertTrue(report.openmc_scatter_contract_declared)
+                self.assertFalse(report.openmc_scatter_contract_valid)
+        self.assertFalse(plain.scatter_row_balance_checked)
+        self.assertTrue(checked.scatter_row_balance_checked)
+        self.assertTrue(production.scatter_row_balance_checked)
+
+    def test_nu_scatter_rejects_bad_reduced_absorption_balance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "nu_scatter_bad_reduced_absorption.h5"
+            write_single_state_fixture(path, total=[0.29, 0.38])
+            with h5py.File(path, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = "consistent nu-scatter matrix"
+                h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                h5["mixtures/fuel"].create_dataset(
+                    "reduced_absorption",
+                    data=np.array([0.01, 0.08]),
+                )
+
+            report = validator.validate_input(
+                path,
+                scatter_row_balance_fail=1.0e-3,
+            )
+
+        self.assertFalse(report.ok)
+        self.assertTrue(report.scatter_row_balance_checked)
+        self.assertTrue(
+            any(
+                "using reduced_absorption" in issue
+                and "exceeds fail threshold" in issue
+                for issue in report.issues
+            ),
+            report.issues,
+        )
+
+    def test_ordinary_and_legacy_scatter_keep_absorption_balance(self) -> None:
+        for mgxs_type in (None, "scatter matrix", "consistent scatter matrix"):
+            with (
+                self.subTest(mgxs_type=mgxs_type),
+                tempfile.TemporaryDirectory() as tmpdir,
+            ):
+                path = Path(tmpdir) / "ordinary_scatter.h5"
+                write_single_state_fixture(path, total=[0.29, 0.38])
+                if mgxs_type is not None:
+                    with h5py.File(path, "a") as h5:
+                        h5.attrs["openmc_scatter_mgxs_type"] = mgxs_type
+
+                report = validator.validate_input(
+                    path,
+                    scatter_row_balance_fail=1.0e-12,
+                )
+
+                self.assertTrue(report.ok, report.issues)
+                self.assertTrue(report.scatter_row_balance_checked)
+                self.assertLess(
+                    float(report.scatter_row_balance_max_rel or 0.0),
+                    1.0e-15,
+                )
+                self.assertFalse(report.openmc_scatter_multiplicity_weighted)
+                self.assertEqual(
+                    report.openmc_scatter_balance_dataset, "absorption"
+                )
+                self.assertEqual(
+                    report.openmc_scatter_contract_declared,
+                    mgxs_type is not None,
+                )
+                self.assertTrue(report.openmc_scatter_contract_valid)
+                self.assertEqual(report.openmc_transport_mgxs_type, "transport")
+                self.assertFalse(report.openmc_transport_contract_declared)
 
     def test_production_preflight_fails_unbalanced_scatter_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

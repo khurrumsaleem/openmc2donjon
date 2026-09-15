@@ -75,7 +75,7 @@ function payloadFact(input: ConvertPreflightInput | null): ConvertShowcaseFact {
     title: "Macroscopic payload",
     badge,
     body:
-      "Carries total, transport/diffusion, absorption and fission data, chi, volumes, energy bounds, and sparse Legendre scattering.",
+      "Carries total, transport/diffusion, volumes, energy bounds, sparse Legendre scattering, and fission data plus chi when present. Static absorption/removal is implied by total minus the outgoing P0 scatter row, not stored as a separate output vector.",
     tone: input == null ? "neutral" : "pass",
   };
 }

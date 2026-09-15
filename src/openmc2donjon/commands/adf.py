@@ -347,6 +347,15 @@ def build_export_volume_flux_parser() -> argparse.ArgumentParser:
         help="energy-group count when --mgxs is not supplied",
     )
     parser.add_argument(
+        "--source-domain-ids",
+        default=None,
+        help=(
+            "comma-separated tally domain IDs in canonical --mgxs mixture_names "
+            "order; use this when the OpenMC tally geometry has different native "
+            "IDs from the MGXS geometry"
+        ),
+    )
+    parser.add_argument(
         "--source-group-order",
         default=DEFAULT_VOLUME_FLUX_SOURCE_GROUP_ORDER,
         help=(
@@ -669,6 +678,10 @@ def export_volume_flux_handler(args: argparse.Namespace) -> int:
             std_dev_dataset_name=args.std_dev_dataset_name,
             mixture_names=_parse_optional_str_tuple(args.mixture_names),
             energy_groups=args.energy_groups,
+            source_domain_ids=_parse_optional_int_tuple(
+                args.source_domain_ids,
+                "--source-domain-ids",
+            ),
             source_group_order=args.source_group_order,
             allow_zero=args.allow_zero_flux,
             force=args.force,
@@ -784,6 +797,18 @@ def _parse_optional_float_tuple(raw: str | None, option: str) -> tuple[float, ..
     if raw is None:
         return None
     return _parse_float_tuple(raw, option)
+
+
+def _parse_optional_int_tuple(raw: str | None, option: str) -> tuple[int, ...] | None:
+    if raw is None:
+        return None
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    if not parts:
+        raise ValueError(f"{option} must list at least one value")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError(f"{option} must contain integer values") from exc
 
 
 def _parse_optional_str_tuple(raw: str | None) -> tuple[str, ...] | None:

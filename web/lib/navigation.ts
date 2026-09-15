@@ -43,7 +43,7 @@ export const WORKFLOW_NAV_ITEMS: readonly NavItem[] = [
   {
     href: "/equivalence",
     label: "SPH",
-    description: "Close the fine-to-coarse model with native DRAGON SPH; OpenMC MG is optional.",
+    description: "Preserve rates from a heterogeneous OpenMC CE fine reference to a homogenized MG coarse model.",
     match: ["/equivalence"],
   },
   {

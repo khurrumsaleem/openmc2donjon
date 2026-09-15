@@ -57,7 +57,8 @@ def main(argv: list[str] | None = None) -> int:
         "model_scope": "withdrawn explicit seven-assembly local colorset diagnostic",
         "fullcore_acceptance_eligible": False,
         "withdrawal_reasons": [
-            "OpenMC MG-side apply-sph is not the current IRENA native-DRAGON SPH route",
+            "this archived local run does not satisfy the clean full-core "
+            "OpenMC CE-fine to MG-coarse physical-SPH contract",
             "a local colorset does not establish the 91-position full-core leakage environment",
             "the current IRENA candidate requires 91 independent domains or "
             "21 exact D3 orbits pooled during OpenMC transport",

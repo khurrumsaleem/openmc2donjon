@@ -68,6 +68,8 @@ export function openmcWalkthroughStatuses({
 
 export const OPENMC_SPH_SIDECAR_FORM_HREF =
   "/equivalence?kind=openmc-sph-sidecar&contract=physical-sph";
+export const OPENMC_SPH_APPLY_FORM_HREF =
+  "/equivalence?kind=apply-sph&contract=physical-sph";
 
 const OPENMC_SPH_SIDECAR_CHECK_NAME = "SPH sidecar";
 

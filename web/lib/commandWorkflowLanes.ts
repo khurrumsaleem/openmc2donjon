@@ -33,7 +33,7 @@ export const COMMAND_WORKFLOW_LANES: readonly WorkflowLane[] = [
       {
         id: "handoff",
         title: "Get the HDF5 handoff",
-        body: "Export from OpenMC or bring an existing production MGXS file.",
+        body: "Export from OpenMC or bring an existing corrected, Converter-ready production MGXS file.",
         href: "/openmc?intent=export&workflow=two-step",
         commandIds: ["openmc2donjon-export", "openmc2donjon-from-openmc"],
       },
@@ -47,7 +47,7 @@ export const COMMAND_WORKFLOW_LANES: readonly WorkflowLane[] = [
       {
         id: "convert",
         title: "Run Converter",
-        body: "Validate the Converter-ready MGXS handoff, including SPH only when the project requires it, then serialize it as L_MULTICOMPO or L_MACROLIB.",
+        body: "Validate the Converter-ready MGXS handoff after any required upstream SPH correction, then serialize it as L_MULTICOMPO or L_MACROLIB.",
         href: "/convert?intent=direct-convert&format=multicompo&check=1&production=1",
         commandIds: ["direct-convert"],
       },
@@ -62,9 +62,9 @@ export const COMMAND_WORKFLOW_LANES: readonly WorkflowLane[] = [
   },
   {
     id: "openmc-sph",
-    title: "OpenMC-side SPH equivalence",
+    title: "Recommended OpenMC CE/MG SPH equivalence",
     summary:
-      "Use this SPH route when a fine-reference OpenMC CE model and its homogenized MG counterpart share the same boundary and project-declared domain mapping. Iterate the physical rate-preserving factors to convergence, validate and apply them to the handoff cross sections, then enter Converter for the requested DONJON object.",
+      "Use a heterogeneous fine-reference OpenMC CE model and a homogenized coarse OpenMC MG model on intentionally different geometries. Align group definitions/tally bins, physical state, boundary conditions, and the declared fine-to-coarse domain mapping; iterate and apply the rate-preserving factors, write the corrected HDF5, then enter Converter.",
     steps: OPENMC_SPH_WORKFLOW_STEPS.map((step) => ({
       id: step.id,
       title: step.title,

@@ -21,24 +21,38 @@ import numpy as np
 
 from .energy_groups import energy_bounds_sha256
 from .hdf5_names import write_string_dataset
-from .mgxs_physics_checks import DEFAULT_CHI_SUM_TOLERANCE
+from .mgxs_physics_checks import (
+    DEFAULT_CHI_SUM_TOLERANCE,
+    _canonical_scatter_mgxs_type,
+)
 
 
 MGXS_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
     "total": ("total",),
     "absorption": ("absorption",),
+    "reduced_absorption": ("reduced absorption", "reduced_absorption"),
     "fission": ("fission",),
     "kappa_fission": ("kappa-fission", "kappa_fission"),
     "nu_fission": ("nu-fission", "nu_fission"),
     "chi": ("chi",),
     "scatter_matrix": ("scatter matrix", "scatter_matrix"),
     "transport_total": ("transport", "transport_total"),
+    "nu_transport_total": ("nu-transport", "nu_transport"),
     "inverse_velocity": ("inverse-velocity", "inverse_velocity"),
 }
 NU_SCATTER_MGXS_TYPES = ("consistent nu-scatter matrix", "nu-scatter matrix")
+SCATTER_CONTRACT_ATTRS = frozenset(
+    {
+        "openmc_scatter_mgxs_type",
+        "openmc_scatter_multiplicity_weighted",
+        "openmc_scatter_balance_dataset",
+        "openmc_transport_mgxs_type",
+    }
+)
 VECTOR_DATASET_KEYS = (
     "total",
     "absorption",
+    "reduced_absorption",
     "fission",
     "kappa_fission",
     "nu_fission",
@@ -56,6 +70,7 @@ class ExportedDomain:
     source: Any
     xs_kwargs: Mapping[str, Any] | None = None
     scatter_mgxs_type: str = "scatter matrix"
+    transport_mgxs_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +93,7 @@ class ExportSummary:
     legendre_order: int
     domains: tuple[ExportedDomain, ...]
     scatter_mgxs_type: str = "scatter matrix"
+    transport_mgxs_type: str | None = None
     std_dev_dataset_count: int = 0
     std_dev_expected_dataset_count: int = 0
 
@@ -141,6 +157,15 @@ def export_openmc_mgxs_library(
     for index, spec in enumerate(specs, start=1):
         name = _domain_name(spec.domain, index, domain_names, used_names, spec.name)
         attrs = dict(spec.attrs or {})
+        reserved_contract_attrs = sorted(
+            SCATTER_CONTRACT_ATTRS.intersection(str(key) for key in attrs)
+        )
+        if reserved_contract_attrs:
+            raise ValueError(
+                f"mixture {name}: DomainExportSpec.attrs must not override "
+                "exporter-owned scatter/transport contract attribute(s): "
+                + ", ".join(reserved_contract_attrs)
+            )
         if any(str(key) == "fissionable" for key in attrs):
             raise ValueError(
                 f"mixture {name}: DomainExportSpec.attrs must not override the "
@@ -168,6 +193,7 @@ def export_openmc_mgxs_library(
                     source=spec.domain,
                     xs_kwargs=spec.xs_kwargs,
                     scatter_mgxs_type=str(data["scatter_mgxs_type"]),
+                    transport_mgxs_type=data["transport_mgxs_type"],
                 ),
                 data | {"attrs": attrs},
             )
@@ -182,22 +208,55 @@ def export_openmc_mgxs_library(
         if missing_transport:
             names = ", ".join(missing_transport)
             raise ValueError(
-                "P1 or higher scattering requires an explicit OpenMC "
-                "TransportXS for every exported domain; missing transport "
+                "P1 or higher scattering requires the OpenMC transport MGXS "
+                "paired with the selected scattering convention for every "
+                f"exported domain; missing {_transport_mgxs_type_for_scatter(scatter_type_label)!r} "
                 f"MGXS for: {names}"
             )
+
+    transport_types = {
+        str(data["transport_mgxs_type"])
+        for _domain, data in exported
+        if data.get("transport_mgxs_type") is not None
+    }
+    common_transport_type = (
+        next(iter(transport_types))
+        if len(transport_types) == 1
+        and all(
+            data.get("transport_mgxs_type") is not None
+            for _domain, data in exported
+        )
+        else None
+    )
+    effective_root_attrs = _effective_root_attrs(
+        library,
+        root_attrs=root_attrs,
+    )
+    reserved_root_attrs = sorted(
+        SCATTER_CONTRACT_ATTRS.intersection(effective_root_attrs)
+    )
+    if reserved_root_attrs:
+        raise ValueError(
+            "root_attrs must not override exporter-owned scatter/transport "
+            "contract attribute(s): " + ", ".join(reserved_root_attrs)
+        )
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as h5:
         h5.attrs["energy_groups"] = ngroups
         h5.attrs["legendre_order"] = legendre_order
         h5.attrs["source"] = "OpenMC mgxs.Library"
-        h5.attrs["openmc_scatter_mgxs_type"] = scatter_type_label
-        for attr_key, attr_value in _effective_root_attrs(
-            library,
-            root_attrs=root_attrs,
-        ).items():
+        for attr_key, attr_value in effective_root_attrs.items():
             _write_hdf5_attr(h5, str(attr_key), attr_value)
+        h5.attrs["openmc_scatter_mgxs_type"] = scatter_type_label
+        h5.attrs["openmc_scatter_multiplicity_weighted"] = (
+            _is_nu_weighted_scatter_mgxs_type(scatter_type_label)
+        )
+        h5.attrs["openmc_scatter_balance_dataset"] = _scatter_balance_dataset(
+            scatter_type_label
+        )
+        if common_transport_type is not None:
+            h5.attrs["openmc_transport_mgxs_type"] = common_transport_type
         h5.attrs["energy_bounds_sha256"] = energy_bounds_sha256(energy_bounds)
         h5.create_dataset("energy_bounds", data=energy_bounds)
         write_string_dataset(
@@ -212,7 +271,6 @@ def export_openmc_mgxs_library(
             group.attrs["fissionable"] = bool(data["fissionable"])
             group.attrs["scatter_format"] = "legendre"
             group.attrs["scatter_axes"] = "moment,from,to"
-            group.attrs["openmc_scatter_mgxs_type"] = str(data["scatter_mgxs_type"])
             group.attrs["source_domain_index"] = export_index
             _write_hdf5_attr_if_present(
                 group,
@@ -238,6 +296,17 @@ def export_openmc_mgxs_library(
                 group.attrs["volume"] = float(data["volume"])
             for attr_key, attr_value in data["attrs"].items():
                 _write_hdf5_attr(group, str(attr_key), attr_value)
+            group.attrs["openmc_scatter_mgxs_type"] = str(data["scatter_mgxs_type"])
+            group.attrs["openmc_scatter_multiplicity_weighted"] = (
+                _is_nu_weighted_scatter_mgxs_type(data["scatter_mgxs_type"])
+            )
+            group.attrs["openmc_scatter_balance_dataset"] = _scatter_balance_dataset(
+                data["scatter_mgxs_type"]
+            )
+            if data["transport_mgxs_type"] is not None:
+                group.attrs["openmc_transport_mgxs_type"] = str(
+                    data["transport_mgxs_type"]
+                )
             for key in VECTOR_DATASET_KEYS:
                 value = data.get(key)
                 if value is not None:
@@ -262,6 +331,7 @@ def export_openmc_mgxs_library(
         legendre_order=legendre_order,
         domains=tuple(domain for domain, _data in exported),
         scatter_mgxs_type=scatter_type_label,
+        transport_mgxs_type=common_transport_type,
         std_dev_dataset_count=std_dev_dataset_count,
         std_dev_expected_dataset_count=std_dev_expected_dataset_count,
     )
@@ -302,6 +372,13 @@ def _domain_data(
         ngroups,
         xs_kwargs=xs_kwargs,
     )
+    reduced_absorption = _optional_vector(
+        library,
+        domain,
+        "reduced_absorption",
+        ngroups,
+        xs_kwargs=xs_kwargs,
+    )
     scatter, scatter_std_dev, actual_scatter_mgxs_type = _required_scatter(
         library,
         domain,
@@ -309,6 +386,17 @@ def _domain_data(
         xs_kwargs=xs_kwargs,
         scatter_mgxs_type=scatter_mgxs_type,
     )
+    if (
+        scatter_mgxs_type is not None
+        and _is_nu_weighted_scatter_mgxs_type(actual_scatter_mgxs_type)
+        and reduced_absorption is None
+    ):
+        raise ValueError(
+            f"domain {_domain_label(domain)}: explicit nu-weighted OpenMC MGXS "
+            f"{actual_scatter_mgxs_type!r} requires OpenMC MGXS "
+            "'reduced absorption' so multiplicity-weighted scattering is paired "
+            "with its physical balance term"
+        )
 
     fission = _optional_vector(library, domain, "fission", ngroups, xs_kwargs=xs_kwargs)
     fission_present = fission is not None
@@ -323,10 +411,18 @@ def _domain_data(
     nu_fission_present = nu_fission is not None
     chi = _optional_vector(library, domain, "chi", ngroups, xs_kwargs=xs_kwargs)
     chi_present = chi is not None
+    transport_mgxs_type = _transport_mgxs_type_for_scatter(
+        actual_scatter_mgxs_type
+    )
+    transport_alias_key = (
+        "nu_transport_total"
+        if transport_mgxs_type == "nu-transport"
+        else "transport_total"
+    )
     transport_total = _optional_vector(
         library,
         domain,
-        "transport_total",
+        transport_alias_key,
         ngroups,
         xs_kwargs=xs_kwargs,
     )
@@ -373,6 +469,14 @@ def _domain_data(
             ngroups,
             xs_kwargs=xs_kwargs,
         ),
+        "reduced_absorption": reduced_absorption,
+        "reduced_absorption_std_dev": _optional_vector_std_dev(
+            library,
+            domain,
+            "reduced_absorption",
+            ngroups,
+            xs_kwargs=xs_kwargs,
+        ),
         "fission": fission,
         "fission_std_dev": _optional_vector_std_dev(
             library,
@@ -409,10 +513,13 @@ def _domain_data(
         "scatter_matrix_std_dev": scatter_std_dev,
         "scatter_mgxs_type": actual_scatter_mgxs_type,
         "transport_total": transport_total,
+        "transport_mgxs_type": (
+            transport_mgxs_type if transport_total is not None else None
+        ),
         "transport_total_std_dev": _optional_vector_std_dev(
             library,
             domain,
-            "transport_total",
+            transport_alias_key,
             ngroups,
             xs_kwargs=xs_kwargs,
         ),
@@ -428,6 +535,7 @@ def _domain_data(
         "fissionable": fissionable,
         "_std_dev_expected_keys": _std_dev_expected_keys(
             fission_present=fission_present,
+            reduced_absorption_present=reduced_absorption is not None,
             kappa_fission_present=kappa_fission is not None,
             nu_fission_present=nu_fission_present,
             chi_present=chi_present,
@@ -514,6 +622,7 @@ def _validate_fission_family_for_export(
 def _std_dev_expected_keys(
     *,
     fission_present: bool,
+    reduced_absorption_present: bool,
     kappa_fission_present: bool,
     nu_fission_present: bool,
     chi_present: bool,
@@ -521,6 +630,8 @@ def _std_dev_expected_keys(
     inverse_velocity_present: bool,
 ) -> tuple[str, ...]:
     keys = ["total", "absorption", "scatter_matrix"]
+    if reduced_absorption_present:
+        keys.append("reduced_absorption")
     if fission_present:
         keys.append("fission")
     if kappa_fission_present:
@@ -627,6 +738,9 @@ def _required_scatter(
             f"domain {_domain_label(domain)}: missing required MGXS "
             f"{' / '.join(mgxs_type_names)}"
         )
+    _require_uncorrected_scatter(
+        mgxs, library=library, label=f"domain {_domain_label(domain)}"
+    )
     scatter = _as_scatter_moments(
         _mgxs_values(mgxs, xs_kwargs=xs_kwargs),
         ngroups,
@@ -643,6 +757,25 @@ def _required_scatter(
         )
     )
     return scatter, scatter_std_dev, actual_type or _scatter_mgxs_type_label(scatter_mgxs_type)
+
+
+def _require_uncorrected_scatter(
+    mgxs: Any, *, library: Any, label: str
+) -> None:
+    """Reject OpenMC's active P0 diagonal correction beside raw total XS."""
+
+    correction = getattr(mgxs, "correction", getattr(library, "correction", None))
+    order = getattr(mgxs, "legendre_order", getattr(library, "legendre_order", 0))
+    scatter_format = getattr(
+        mgxs, "scatter_format", getattr(library, "scatter_format", "legendre")
+    )
+    if correction == "P0" and order == 0 and scatter_format == "legendre":
+        raise ValueError(
+            f"{label}: active OpenMC correction='P0' changes the scattering "
+            "diagonal and cannot be paired with Converter's raw total XS; "
+            "set library.correction = None before library.build_library() "
+            "and regenerate the recipe tallies/statepoint as needed"
+        )
 
 
 def _get_mgxs_optional(library: Any, domain: Any, key: str) -> Any | None:
@@ -690,11 +823,37 @@ def _scatter_mgxs_type_candidates(scatter_mgxs_type: str | None) -> tuple[str, .
     value = str(scatter_mgxs_type).strip()
     if not value:
         raise ValueError("scatter_mgxs_type must not be empty")
-    return (value,)
+    canonical = _canonical_scatter_mgxs_type(value)
+    return (value,) if value == canonical else (value, canonical)
 
 
 def _scatter_mgxs_type_label(scatter_mgxs_type: str | None) -> str:
     return _scatter_mgxs_type_candidates(scatter_mgxs_type)[0]
+
+
+def _is_nu_weighted_scatter_mgxs_type(scatter_mgxs_type: Any) -> bool:
+    normalized = _normalize_mgxs_type_name(scatter_mgxs_type)
+    return normalized in {
+        _normalize_mgxs_type_name(value) for value in NU_SCATTER_MGXS_TYPES
+    }
+
+
+def _normalize_mgxs_type_name(value: Any) -> str:
+    return " ".join(str(value).strip().lower().replace("_", " ").replace("-", " ").split())
+
+
+def _scatter_balance_dataset(scatter_mgxs_type: Any) -> str:
+    if _is_nu_weighted_scatter_mgxs_type(scatter_mgxs_type):
+        return "reduced_absorption"
+    return "absorption"
+
+
+def _transport_mgxs_type_for_scatter(scatter_mgxs_type: Any) -> str:
+    """Return the OpenMC TransportXS weighting paired with scattering."""
+
+    if _is_nu_weighted_scatter_mgxs_type(scatter_mgxs_type):
+        return "nu-transport"
+    return "transport"
 
 
 def _effective_root_attrs(

@@ -162,6 +162,13 @@ function StepLink({ href }: { href: string }) {
 function ProductionEvidenceStrip({ input }: { input: ConvertPreflightInput }) {
   const uncertaintyCoverage = coverage(input);
   const uncertaintyStatus = uncertaintyGateStatus(input);
+  const scatterWeighted = input.openmc_scatter_multiplicity_weighted;
+  const scatterBalance = input.openmc_scatter_balance_dataset;
+  const scatterType = input.openmc_scatter_mgxs_type;
+  const scatterDeclared = input.openmc_scatter_contract_declared;
+  const scatterValid = input.openmc_scatter_contract_valid;
+  const transportType = input.openmc_transport_mgxs_type;
+  const transportDeclared = input.openmc_transport_contract_declared;
   const items = [
     {
       label: "Energy mesh",
@@ -191,6 +198,31 @@ function ProductionEvidenceStrip({ input }: { input: ConvertPreflightInput }) {
           : "warn",
       detail: "Default warning level is 5e-2 unless the run overrides it.",
     },
+    {
+      label: "Scatter / transport",
+      value:
+        scatterValid === false
+          ? "invalid contract"
+          : scatterDeclared === false
+            ? "ordinary (legacy)"
+            : scatterWeighted === true
+              ? "ν-weighted scatter"
+              : scatterWeighted === false
+                ? "ordinary scatter"
+                : "not declared",
+      tone:
+        scatterValid === false
+          ? "fail"
+          : scatterDeclared === true
+            ? "pass"
+            : "warn",
+      detail:
+        scatterValid === false
+          ? "Conflicting declarations, a missing required removal vector, or a mismatched TransportXS contract; conversion is blocked."
+          : scatterWeighted == null || scatterBalance == null
+            ? "The input does not resolve one auditable scattering convention."
+            : `${scatterType ?? "legacy ordinary-scatter default"} · balance uses ${scatterBalance === "reduced_absorption" ? "reduced absorption" : "ordinary absorption"} · transport uses ${transportType ?? "no TransportXS payload"}${transportType ? (transportDeclared === true ? " (declared)" : " (legacy inference)") : ""}.`,
+    },
   ] as const;
   return (
     <section className="mt-4 rounded-lg border border-[var(--edge)] bg-black/10 p-3">
@@ -202,7 +234,7 @@ function ProductionEvidenceStrip({ input }: { input: ConvertPreflightInput }) {
           audit trail
         </span>
       </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-3">
+      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         {items.map((item) => (
           <div
             key={item.label}

@@ -72,7 +72,7 @@ MGXS_TYPES = [
     "scatter matrix",
     "nu-scatter matrix",
     "multiplicity matrix",
-    "transport",
+    "nu-transport",
 ]
 VOLUME_FLUX_TALLY_NAME = "irena30_sph_stage3_volume_flux"
 AXIAL_HEIGHT_CM = 10.0

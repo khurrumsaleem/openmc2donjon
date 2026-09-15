@@ -206,6 +206,9 @@ class FromOpenMCCliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("recipe dry-run OK", rendered)
         self.assertIn("statepoint: none", rendered)
+        self.assertIn(
+            "transport_mgxs_type: not declared (P0 fallback)", rendered
+        )
         self.assertIn("output: " + str(hdf5.resolve()) + " (not written)", rendered)
         self.assertIn("one-step conversion dry-run OK", rendered)
         self.assertIn("format: multicompo", rendered)

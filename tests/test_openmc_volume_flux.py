@@ -77,6 +77,8 @@ class OpenMCVolumeFluxTests(unittest.TestCase):
         self.assertEqual(attrs["group_order"], MGXS_DONJON_GROUP_ORDER)
         self.assertEqual(attrs["source_group_order"], DEFAULT_SOURCE_GROUP_ORDER)
         self.assertEqual(attrs["layout"], "[mixture, group]")
+        self.assertFalse(attrs["energy_bounds_verified"])
+        self.assertFalse(attrs["spatial_domain_order_verified"])
         self.assertEqual(
             tuple(_decode(value) for value in attrs["mixture_names"]),
             ("ASM_A", "ASM_B"),
@@ -84,6 +86,8 @@ class OpenMCVolumeFluxTests(unittest.TestCase):
         self.assertEqual(std_attrs["schema"], SCHEMA)
         self.assertEqual(std_attrs["group_order"], MGXS_DONJON_GROUP_ORDER)
         self.assertEqual(std_attrs["source_group_order"], DEFAULT_SOURCE_GROUP_ORDER)
+        self.assertFalse(std_attrs["energy_bounds_verified"])
+        self.assertFalse(std_attrs["spatial_domain_order_verified"])
 
     def test_writes_custom_openmc_flux_dataset_for_mg_macro_flux(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -105,6 +109,8 @@ class OpenMCVolumeFluxTests(unittest.TestCase):
 
         self.assertEqual(report.dataset, "openmc_mg_flux")
         self.assertIsNone(report.std_dev_dataset)
+        self.assertFalse(report.energy_bounds_verified)
+        self.assertFalse(report.spatial_domain_order_verified)
         np.testing.assert_allclose(values, flux)
         self.assertEqual(attrs["group_order"], MGXS_DONJON_GROUP_ORDER)
         self.assertEqual(
@@ -154,6 +160,220 @@ class OpenMCVolumeFluxTests(unittest.TestCase):
         self.assertEqual(payload["decision"], "openmc2donjon_volume_flux_export_passed")
         self.assertEqual(payload["dataset"], "openmc_ce_flux")
         self.assertEqual(payload["tally_name"], "ce_flux")
+        self.assertTrue(payload["energy_bounds_verified"])
+        self.assertTrue(payload["spatial_domain_order_verified"])
+        self.assertEqual(payload["source_filter_order"], ["CellFilter", "EnergyFilter"])
+        self.assertEqual(payload["source_domain_ids"], [101, 202])
+        self.assertTrue(attrs["energy_bounds_verified"])
+        self.assertTrue(attrs["spatial_domain_order_verified"])
+        self.assertEqual(
+            tuple(_decode(value) for value in attrs["source_filter_order"]),
+            ("CellFilter", "EnergyFilter"),
+        )
+        self.assertEqual(tuple(attrs["source_domain_ids"]), (101, 202))
+
+    def test_canonicalizes_reversed_energy_and_spatial_filter_axes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            statepoint = tmp / "statepoint.10.h5"
+            statepoint.write_bytes(b"fake")
+            mgxs = tmp / "mgxs.h5"
+            output = tmp / "ce_flux.h5"
+            _write_mgxs_metadata(mgxs)
+            # Filter order is [energy, cell].  In that order, the low-to-high
+            # matrix is [[FUEL-g0, MOD-g0], [FUEL-g1, MOD-g1]].
+            fake_openmc = _fake_openmc_module(
+                mean=np.array([1.0, 3.0, 2.0, 4.0]),
+                std_dev=np.array([0.1, 0.3, 0.2, 0.4]),
+                filters=(
+                    EnergyFilter(((1.0e-5, 1.0), (1.0, 1.0e7))),
+                    CellFilter((101, 202)),
+                ),
+            )
+
+            with _patched_openmc(fake_openmc):
+                report = export_openmc_volume_flux(
+                    statepoint,
+                    output,
+                    mgxs_h5=mgxs,
+                    tally_name="ce_flux",
+                )
+
+            with h5py.File(output, "r") as h5:
+                values = h5[DATASET_NAME][:]
+
+        np.testing.assert_allclose(values, [[2.0, 1.0], [4.0, 3.0]])
+        self.assertEqual(report.source_filter_order, ("EnergyFilter", "CellFilter"))
+        self.assertTrue(report.energy_bounds_verified)
+        self.assertTrue(report.spatial_domain_order_verified)
+
+    def test_rejects_energy_filter_bounds_that_disagree_with_mgxs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            statepoint = tmp / "statepoint.10.h5"
+            statepoint.write_bytes(b"fake")
+            mgxs = tmp / "mgxs.h5"
+            _write_mgxs_metadata(mgxs)
+            fake_openmc = _fake_openmc_module(
+                mean=np.arange(1.0, 5.0),
+                std_dev=np.full(4, 0.1),
+                filters=(
+                    CellFilter((101, 202)),
+                    EnergyFilter(((1.0e-5, 2.0), (2.0, 1.0e7))),
+                ),
+            )
+
+            with _patched_openmc(fake_openmc), self.assertRaisesRegex(
+                ValueError,
+                "EnergyFilter bin edges do not match",
+            ):
+                export_openmc_volume_flux(
+                    statepoint,
+                    tmp / "out.h5",
+                    mgxs_h5=mgxs,
+                    tally_name="ce_flux",
+                )
+
+    def test_rejects_swapped_spatial_domain_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            statepoint = tmp / "statepoint.10.h5"
+            statepoint.write_bytes(b"fake")
+            mgxs = tmp / "mgxs.h5"
+            _write_mgxs_metadata(mgxs)
+            fake_openmc = _fake_openmc_module(
+                mean=np.arange(1.0, 5.0),
+                std_dev=np.full(4, 0.1),
+                filters=(
+                    CellFilter((202, 101)),
+                    EnergyFilter(((1.0e-5, 1.0), (1.0, 1.0e7))),
+                ),
+            )
+
+            with _patched_openmc(fake_openmc), self.assertRaisesRegex(
+                ValueError,
+                "does not match --mgxs source_domain_id order",
+            ):
+                export_openmc_volume_flux(
+                    statepoint,
+                    tmp / "out.h5",
+                    mgxs_h5=mgxs,
+                    tally_name="ce_flux",
+                )
+
+    def test_explicit_source_domain_ids_support_a_different_tally_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            statepoint = tmp / "statepoint.10.h5"
+            statepoint.write_bytes(b"fake")
+            mgxs = tmp / "mgxs.h5"
+            output = tmp / "ce_flux.h5"
+            _write_mgxs_metadata(mgxs)
+            fake_openmc = _fake_openmc_module(
+                mean=np.arange(1.0, 5.0),
+                std_dev=np.full(4, 0.1),
+                filters=(
+                    CellFilter((7001, 7002)),
+                    EnergyFilter(((1.0e-5, 1.0), (1.0, 1.0e7))),
+                ),
+            )
+
+            with _patched_openmc(fake_openmc):
+                report = export_openmc_volume_flux(
+                    statepoint,
+                    output,
+                    mgxs_h5=mgxs,
+                    tally_name="ce_flux",
+                    source_domain_ids=(7001, 7002),
+                )
+
+            with h5py.File(output, "r") as h5:
+                attrs = dict(h5[DATASET_NAME].attrs)
+
+        self.assertEqual(report.source_domain_ids, (7001, 7002))
+        self.assertEqual(tuple(attrs["source_domain_ids"]), (7001, 7002))
+        self.assertEqual(
+            tuple(_decode(value) for value in attrs["mixture_names"]),
+            ("FUEL", "MOD"),
+        )
+
+    def test_rejects_missing_or_unverifiable_tally_filters_with_mgxs(self) -> None:
+        cases = (
+            ((), "exactly one EnergyFilter"),
+            (
+                (
+                    CellFilter((101, 202)),
+                    MaterialFilter((101, 202)),
+                ),
+                "exactly one EnergyFilter",
+            ),
+            (
+                (
+                    MeshFilter(((1, 1), (2, 1))),
+                    EnergyFilter(((1.0e-5, 1.0), (1.0, 1.0e7))),
+                ),
+                "supported spatial/domain filter",
+            ),
+        )
+        for filters, message in cases:
+            with self.subTest(filters=tuple(type(value).__name__ for value in filters)):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmp = Path(tmpdir)
+                    statepoint = tmp / "statepoint.10.h5"
+                    statepoint.write_bytes(b"fake")
+                    mgxs = tmp / "mgxs.h5"
+                    _write_mgxs_metadata(mgxs)
+                    fake_openmc = _fake_openmc_module(
+                        mean=np.arange(1.0, 5.0),
+                        std_dev=np.full(4, 0.1),
+                        filters=filters,
+                    )
+
+                    with _patched_openmc(fake_openmc), self.assertRaisesRegex(
+                        ValueError,
+                        message,
+                    ):
+                        export_openmc_volume_flux(
+                            statepoint,
+                            tmp / "out.h5",
+                            mgxs_h5=mgxs,
+                            tally_name="ce_flux",
+                        )
+
+    def test_rejects_mgxs_metadata_overrides_that_disagree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            statepoint = tmp / "statepoint.10.h5"
+            statepoint.write_bytes(b"fake")
+            mgxs = tmp / "mgxs.h5"
+            _write_mgxs_metadata(mgxs)
+            fake_openmc = _fake_openmc_module(
+                mean=np.arange(1.0, 5.0),
+                std_dev=np.full(4, 0.1),
+            )
+
+            with _patched_openmc(fake_openmc), self.assertRaisesRegex(
+                ValueError,
+                "--mixture-names disagrees",
+            ):
+                export_openmc_volume_flux(
+                    statepoint,
+                    tmp / "names.h5",
+                    mgxs_h5=mgxs,
+                    tally_name="ce_flux",
+                    mixture_names=("MOD", "FUEL"),
+                )
+            with _patched_openmc(fake_openmc), self.assertRaisesRegex(
+                ValueError,
+                "--energy-groups disagrees",
+            ):
+                export_openmc_volume_flux(
+                    statepoint,
+                    tmp / "groups.h5",
+                    mgxs_h5=mgxs,
+                    tally_name="ce_flux",
+                    energy_groups=3,
+                )
 
     def test_rejects_nonpositive_or_mismatched_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -236,6 +456,10 @@ class OpenMCVolumeFluxTests(unittest.TestCase):
             fake_openmc = _fake_openmc_module(
                 mean=np.array([[0.0], [1.0], [0.0], [2.0]]),
                 std_dev=np.array([[0.0], [0.1], [0.0], [0.2]]),
+                filters=(
+                    CellFilter((7001, 7002)),
+                    EnergyFilter(((1.0e-5, 1.0), (1.0, 1.0e7))),
+                ),
             )
 
             stream = io.StringIO()
@@ -250,6 +474,8 @@ class OpenMCVolumeFluxTests(unittest.TestCase):
                         str(mgxs),
                         "--tally-name",
                         "ce_flux",
+                        "--source-domain-ids",
+                        "7001,7002",
                         "--allow-zero-flux",
                         "--summary-json",
                         str(summary),
@@ -263,6 +489,7 @@ class OpenMCVolumeFluxTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(payload["allow_zero_flux"])
         self.assertEqual(payload["min"], 0.0)
+        self.assertEqual(payload["source_domain_ids"], [7001, 7002])
         np.testing.assert_allclose(values, [[1.0, 0.0], [2.0, 0.0]])
 
 
@@ -278,12 +505,53 @@ def _write_mgxs_metadata(path: Path) -> None:
         h5.create_dataset("energy_bounds", data=np.array([1.0e-5, 1.0, 1.0e7]))
         h5.create_dataset("mixture_names", data=np.asarray(("FUEL", "MOD"), dtype="S"))
         mixtures = h5.create_group("mixtures")
-        mixtures.create_group("FUEL")
-        mixtures.create_group("MOD")
+        fuel = mixtures.create_group("FUEL")
+        fuel.attrs["source_domain_id"] = 101
+        moderator = mixtures.create_group("MOD")
+        moderator.attrs["source_domain_id"] = 202
 
 
-def _fake_openmc_module(*, mean: np.ndarray, std_dev: np.ndarray):
+class EnergyFilter:
+    def __init__(self, bins: tuple[tuple[float, float], ...]) -> None:
+        self.bins = bins
+        self.num_bins = len(bins)
+
+
+class CellFilter:
+    def __init__(self, bins: tuple[int, ...]) -> None:
+        self.bins = bins
+        self.num_bins = len(bins)
+
+
+class MaterialFilter(CellFilter):
+    pass
+
+
+class MeshFilter:
+    def __init__(self, bins: tuple[tuple[int, int], ...]) -> None:
+        self.bins = bins
+        self.num_bins = len(bins)
+
+
+def _fake_openmc_module(
+    *,
+    mean: np.ndarray,
+    std_dev: np.ndarray,
+    filters: tuple[object, ...] | None = None,
+):
+    selected_filters = (
+        filters
+        if filters is not None
+        else (
+            CellFilter((101, 202)),
+            EnergyFilter(((1.0e-5, 1.0), (1.0, 1.0e7))),
+        )
+    )
+
     class FakeTally:
+        def __init__(self) -> None:
+            self.filters = selected_filters
+
         def get_values(self, *, scores=None, value: str = "mean"):
             if scores != ["flux"]:
                 raise AssertionError(f"unexpected scores: {scores!r}")

@@ -50,18 +50,22 @@ examples/donjon_openmc2donjon/c5g7_assembly_p1_adf_production.h5
 
 ## OpenMC Exporter Integration
 
-The OpenMC-side exporter has been checked against the existing C5G7
-assembly-wise P1 statepoint. The local upstream driver now rebuilds the
-OpenMC `mgxs.Library`, loads the saved statepoint, and writes the HDF5 contract
-through `export_openmc_mgxs_library`.
+The accepted C5G7 HDF5 declares the ordinary
+`consistent scatter matrix`/`absorption` contract. An audit of the saved
+assembly-wise P1 source statepoint found its ordinary and nu-weighted P0
+scattering reaction-rate tallies identical in all 441 bins. This supports the
+ordinary interpretation for this thermal fixture; it is not an `(n,xn)`
+multiplicity validation case.
 
-The C5G7 recipe is a compatibility recipe for this accepted baseline: it
-explicitly selects OpenMC's `consistent nu-scatter matrix` MGXS because that is
-the tally definition present in the locked statepoint. New production recipes
-should use ordinary `scatter matrix` unless a non-default scattering definition
-is intentional.
+The saved statepoint predates the current transport-complete recipe and lacks
+the complete tally set now required, including an explicit OpenMC
+`TransportXS`. It therefore cannot be loaded directly to reproduce the accepted
+snapshot through the current exporter. The numerical datasets in the accepted
+snapshot remain locked, but a new exporter-parity claim requires regenerating
+the OpenMC tallies and statepoint with the current recipe. A bare P1 row-sum
+transport reconstruction is not accepted.
 
-Smoke result:
+Historical locked-snapshot comparison (not a current statepoint replay):
 
 ```text
 mixtures = 9
@@ -71,20 +75,22 @@ transport_total present = true
 max_abs_diff vs previous custom HDF5 dump = 0.0
 ```
 
-Local reproduction command:
+Reproduction command after generating a compatible statepoint with the current
+recipe:
 
 ```sh
 PYTHONPATH=src \
 C5G7_ADF_SOURCE=examples/donjon_openmc2donjon/c5g7_assembly_p1_adf_production.h5 \
   python -m openmc2donjon.export_cli \
   --recipe scripts/c5g7_export_recipe.py \
-  --statepoint /Users/wen/openmc-workspace/c5g7_converter_test/runs/assembly_p1/statepoint.120.h5 \
+  --statepoint /path/to/statepoint.generated-with-current-tallies.h5 \
   -o /private/tmp/openmc2donjon_c5g7_exporter_assembly_p1.h5
 ```
 
-The accepted production HDF5 snapshot has been regenerated through this exporter
-path, with the existing production ADF payload copied forward. The top-level
-acceptance run remains green.
+This command is not a replay recipe for the older saved statepoint. Exporter
+parity must be re-established and recorded after the transport-complete OpenMC
+run; the accepted snapshot remains available for Converter and DONJON readback
+validation in the meantime.
 
 ## ADF Denominator Regeneration
 

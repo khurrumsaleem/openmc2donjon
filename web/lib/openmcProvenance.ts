@@ -53,7 +53,7 @@ export function openmcProvenanceView(
       label: "REFERENCE BOUND",
       tone: "warn",
       summary:
-        "Native DRAGON SPH may consume this frozen MGXS reference; some inputs needed to replay the OpenMC transport are still missing.",
+        "A declared equivalence workflow may consume this frozen reference, but some inputs needed to replay the OpenMC transport are still missing.",
       integrityOk,
       referenceBound,
       exportReplayable,

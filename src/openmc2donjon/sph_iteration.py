@@ -127,8 +127,8 @@ def create_sph_update_table(
     damping: float = 1.0,
     clip_min: float | None = None,
     clip_max: float | None = None,
-    flux_normalization: str = "none",
-    sph_target: str = "flux",
+    flux_normalization: str = "auto",
+    sph_target: str = "rate",
     zero_flux_policy: str = "reject",
     flux_floor_rel: float | None = None,
     freeze_groups: tuple[int, ...] | None = None,
@@ -143,23 +143,31 @@ def create_sph_update_table(
 ) -> SphUpdateTableReport:
     """Write the next SPH factors as a CSV table.
 
-    The update is multiplicative and damped.  If ``flux_normalization`` is not
-    ``"none"``, the low-order flux is first scaled to the reference flux's
-    global normalization.  With the default ``sph_target="flux"`` the fixed
-    point matches the corrected low-order flux to the reference:
-
-    ``next_sph = previous_sph * (reference_flux / normalized_low_order_flux) ** damping``.
-
-    With ``sph_target="rate"`` the fixed point preserves reaction rates
-    instead (``phi_low_order = sph * reference_flux``, so ``XS/sph`` times the
+    The update is multiplicative and damped.  The default
+    ``flux_normalization="auto"`` requires group-wise H-FACTOR/kappa-fission
+    data and resolves to production power normalization.  Explicit
+    ``"none"`` and ``"total"`` modes are retained for diagnostic studies.
+    With the default ``sph_target="rate"`` the fixed point preserves reaction
+    rates (``phi_low_order = sph * reference_flux``, so ``XS/sph`` times the
     corrected flux reproduces the reference rates):
 
     ``next_sph = previous_sph * (normalized_low_order_flux / (previous_sph * reference_flux)) ** damping``.
+
+    Power normalization follows the same cross-section convention: the CE
+    reference integral uses the uncorrected H factor, while the current
+    low-order integral uses ``H / previous_sph``.  Consequently an exact
+    rate-preserving fixed point remains invariant even when the previous SPH
+    factors are nonuniform.
 
     Rate mode relies on spatial coupling between regions; in an isolated
     region the rate-mode ratio is independent of the SPH factors (reaction
     rates are scale-invariant there), so use ``freeze_groups`` or
     ``flux_floor_rel`` for isolated or weakly-coupled bins.
+
+    ``sph_target="flux"`` is retained for explicit diagnostic studies.  It
+    matches the corrected low-order flux to the reference:
+
+    ``next_sph = previous_sph * (reference_flux / normalized_low_order_flux) ** damping``.
 
     DONJON's ``DSPH``/``MAC`` path treats ``NSPH`` as a divisor on the
     macroscopic data.  A low-order flux that is too high must therefore produce
@@ -269,6 +277,8 @@ def create_sph_update_table(
         mixture_names=mixture_names,
         energy_groups=energy_groups,
         flux_normalization=flux_normalization,
+        previous_sph=previous.values,
+        sph_target=sph_target,
         zero_mask=frozen_mask,
     )
     resolved_flux_normalization = str(normalization["flux_normalization"])
@@ -434,7 +444,7 @@ def print_report(report: SphUpdateTableReport) -> None:
         f"  mixtures={len(report.mixture_names)} groups={report.energy_groups} "
         f"damping={report.damping:g} clipped={report.clipped_count}"
     )
-    if report.sph_target != "flux":
+    if report.sph_target != "rate":
         print(f"  sph_target: {report.sph_target}")
     if report.zero_flux_policy != "reject":
         print(
@@ -705,6 +715,8 @@ def _normalized_low_order_flux(
     mixture_names: tuple[str, ...],
     energy_groups: int,
     flux_normalization: str,
+    previous_sph: np.ndarray,
+    sph_target: str,
     zero_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[str, float | str | None]]:
     if flux_normalization == "none":
@@ -744,9 +756,19 @@ def _normalized_low_order_flux(
     else:
         raise AssertionError(f"unhandled flux normalization: {flux_normalization}")
 
-    _validate_normalization_weights(weights, flux_normalization)
-    reference_integral = float(np.sum(reference_flux * weights))
-    low_order_integral = float(np.sum(low_order_flux * weights))
+    reference_weights = weights
+    low_order_weights = weights
+    if flux_normalization == "power" and sph_target == "rate":
+        # The low-order solve sees cross sections divided by the current NSPH,
+        # including H/kappa-fission.  The CE reference remains normalized with
+        # the uncorrected homogenized H factor.  At phi_MG = N * phi_CE this
+        # makes both power integrals identical for arbitrary nonuniform N.
+        low_order_weights = weights / previous_sph
+
+    _validate_normalization_weights(reference_weights, flux_normalization)
+    _validate_normalization_weights(low_order_weights, flux_normalization)
+    reference_integral = float(np.sum(reference_flux * reference_weights))
+    low_order_integral = float(np.sum(low_order_flux * low_order_weights))
     if not np.isfinite(reference_integral) or reference_integral <= 0.0:
         raise ValueError(
             f"{flux_normalization} normalization reference integral must be positive"

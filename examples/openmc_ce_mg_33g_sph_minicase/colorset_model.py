@@ -1,4 +1,4 @@
-"""OpenMC CE/MG colorsets used for OpenMC-side SPH.
+"""OpenMC CE/MG same-partition colorsets used for an SPH diagnostic.
 
 The same spatial cell domains are used in the continuous-energy reference
 calculation and in the OpenMC multi-group macro calculation.  Each cell domain
@@ -14,8 +14,11 @@ SPH factors per energy group.
 
 Set ``OPENMC2DONJON_COLORSET_VARIANT=five_region_2d`` to exercise a larger
 two-dimensional colorset with five output regions.  Both variants use the same
-workflow: OpenMC CE reference, OpenMC MG macro solve on the same geometry, then
-OpenMC-side ``SPH(region, group)`` factors for the converter.
+workflow: OpenMC CE reference, OpenMC MG macro solve on the same spatial
+partition, then diagnostic ``SPH(region, group)`` factors for the converter.
+The standard physical workflow instead compares a detailed heterogeneous CE
+geometry with a homogenized MG coarse geometry through an explicit
+comparison-domain mapping.
 """
 
 from __future__ import annotations
@@ -62,7 +65,7 @@ MGXS_TYPES = [
     "scatter matrix",
     "nu-scatter matrix",
     "multiplicity matrix",
-    "transport",
+    "nu-transport",
 ]
 VOLUME_FLUX_TALLY_NAME = "openmc_ce_mg_sph_volume_flux"
 
@@ -426,5 +429,5 @@ def root_attrs() -> dict[str, object]:
         "mg_macro_scatter_format": MG_MACRO_SCATTER_FORMAT,
         "mg_macro_histogram_bins": MG_MACRO_HISTOGRAM_BINS,
         "spatial_mapping": "one OpenMC CE/MG cell domain -> one SPH/DONJON mixture",
-        "sph_route": "OpenMC CE reference + OpenMC MG same geometry",
+        "sph_route": "diagnostic OpenMC CE/MG same-partition flux comparison",
     }

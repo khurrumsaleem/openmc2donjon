@@ -57,10 +57,10 @@ function ConvertPageContent() {
     <main className="app-page">
       <div className="app-container max-w-5xl">
         <WorkflowPageHeader
-          step="Converter"
-          eyebrow={model.withdrawnIrenaColorsetWorkflow ? "Withdrawn diagnostic" : "Direct conversion"}
-          title={model.withdrawnIrenaColorsetWorkflow ? "Review the archived IRENA five-colorset handoff" : "Convert an OpenMC handoff to a DONJON object"}
-          description={model.withdrawnIrenaColorsetWorkflow ? "This URL belongs to the withdrawn five-colorset IRENA experiment. Its paths remain visible for historical diagnosis, but it cannot run Converter or create a production receipt." : "Select one openmc2donjon MGXS handoff HDF5, run the no-write validation, then write L_MULTICOMPO or L_MACROLIB with a hash-linked receipt. A project is optional."}
+          step={model.withdrawnIrenaColorsetWorkflow ? "Archive" : "Core"}
+          eyebrow={model.withdrawnIrenaColorsetWorkflow ? "Withdrawn diagnostic" : "Required formal handoff boundary"}
+          title={model.withdrawnIrenaColorsetWorkflow ? "Review the archived IRENA five-colorset handoff" : "Converter"}
+          description={model.withdrawnIrenaColorsetWorkflow ? "This URL belongs to the withdrawn five-colorset IRENA experiment. Its paths remain visible for historical diagnosis, but it cannot run Converter or create a production receipt." : "Converter is the mandatory core of openmc2donjon. Select one Converter-ready MGXS HDF5, run the no-write validation, then write L_MULTICOMPO or L_MACROLIB with a hash-linked receipt. A project is optional."}
           input={model.withdrawnIrenaColorsetWorkflow ? "Archived seven-domain colorset artifact (diagnostic only)" : model.requirePhysicalSph ? "One physical-SPH-applied MGXS HDF5 with arbitrary declared domains" : "One OpenMC MGXS HDF5 handoff"}
           output={model.withdrawnIrenaColorsetWorkflow ? "No production output; historical metadata only" : "One checked L_MULTICOMPO or L_MACROLIB object + receipt"}
           actions={
@@ -68,7 +68,7 @@ function ConvertPageContent() {
               href={model.withdrawnIrenaColorsetWorkflow ? strictIrenaHref : model.requirePhysicalSph ? sphHref : "/openmc"}
               className="btn btn-secondary"
             >
-              {model.withdrawnIrenaColorsetWorkflow ? "Open current IRENA route" : model.requirePhysicalSph ? "Finish physical SPH" : "Need to create an HDF5?"}
+              {model.withdrawnIrenaColorsetWorkflow ? "Open IRENA research template" : model.requirePhysicalSph ? "Finish physical SPH" : "Need to create an HDF5?"}
             </Link>
           }
         />
@@ -126,7 +126,10 @@ function ConvertPageContent() {
               Validate and convert one handoff
             </h2>
             <p className="mt-1 max-w-3xl text-[12px] leading-5 text-[var(--fg-2)]">
-              This handoff requests strict physical SPH on its own declared domains. One domain or many are valid; Converter does not assume a component, colorset, lattice, or core topology.
+              This formal handoff accepts only an HDF5 whose required
+              rate-preserving SPH correction was already applied on its declared
+              domains. Converter checks that input contract; it does not run the
+              CE/MG iteration or assume a component, lattice, or core topology.
             </p>
           </div> : null}
         <ConvertForm

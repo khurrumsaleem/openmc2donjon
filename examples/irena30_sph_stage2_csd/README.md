@@ -1,12 +1,14 @@
 # IRENA local colorset SPH research
 
-This directory preserves local seven-assembly IRENA colorset studies.  A
+This directory preserves local seven-assembly IRENA colorset studies. Its
+native-DRAGON path is an advanced, project-specific research route, not the
+standard OpenMC CE/MG SPH product route. A
 colorset is a valid qualification unit only when its fine and coarse geometry,
 boundary conditions, homogenization volumes, and physical observable are the
 same problem.  A converged local result is not automatically a full-core
 component library.
 
-The strict candidate route is:
+The advanced native research route preserved here is:
 
 ```text
 OpenMC CE fine colorset
@@ -44,7 +46,7 @@ vacuum boundary is declared.
 
 For the actual IRENA full-core candidate, local material labels and the older
 13 neighbor signatures are insufficient: they merge positions that are not
-related by a symmetry of the loaded core.  The current route in
+related by a symmetry of the loaded core.  The advanced research template in
 `examples/irena30_native_fullcore/` models all 91 fine assemblies and uses
 either 91 independent domains or 21 exact global D3 symmetry orbits pooled
 during OpenMC transport.
@@ -55,4 +57,10 @@ during OpenMC transport.
 OpenMC-MG-side experiments.  They used combinations of identity substitution,
 flux floors, frozen groups, clipping, or incomplete energy coverage.  They are
 retained as negative/research evidence only; `ALLOW_LEGACY_SPH2=1` is required
-to run them, and their output must never be marked production-ready.
+to run them, and their output must never be marked production-ready. The CE
+handoff now declares `consistent nu-scatter matrix`; consequently its
+zero-flux rows may only be filled from an OpenMC MG macrolib carrying the same
+explicit `openmc_scatter_*` root contract and a valid `multiplicity_matrix`.
+That matrix is also evidence that OpenMC retained ordinary absorption alongside
+the stored nu-scatter matrix. The historical unannotated IRENA macrolib is
+rejected rather than being treated as nu-scatter.

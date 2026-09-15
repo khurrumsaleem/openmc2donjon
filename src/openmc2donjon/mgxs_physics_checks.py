@@ -29,6 +29,38 @@ DEFAULT_NU_RATIO_MAXIMUM: float | None = None
 DEFAULT_TRANSPORT_P1_REL = 5.0e-2
 LOCAL_ENERGY_BOUNDS_RTOL = 1.0e-10
 LOCAL_ENERGY_BOUNDS_ATOL = 0.0
+# Ordinary scattering balances against absorption. Multiplicity-weighted
+# nu-scattering balances against OpenMC's reduced absorption.
+ORDINARY_OPENMC_SCATTER_MGXS_TYPES = frozenset(
+    {
+        "scatter matrix",
+        "consistent scatter matrix",
+    }
+)
+NU_WEIGHTED_OPENMC_SCATTER_MGXS_TYPES = frozenset(
+    {
+        "nu scatter matrix",
+        "consistent nu scatter matrix",
+    }
+)
+OPENMC_SCATTER_BALANCE_DATASETS = frozenset(
+    {
+        "absorption",
+        "reduced_absorption",
+    }
+)
+OPENMC_TRANSPORT_MGXS_TYPES = frozenset({"transport", "nu transport"})
+
+
+@dataclass(frozen=True)
+class _ResolvedScatterContract:
+    mgxs_type: str | None
+    multiplicity_weighted: bool
+    balance_dataset: str
+    declared: bool
+    transport_mgxs_type: str | None
+    transport_declared: bool
+    issue: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +73,13 @@ class MgxsPhysicsCheckReport:
     scatter_row_balance_worst: str | None = None
     scatter_row_balance_warnings: tuple[str, ...] = ()
     scatter_row_balance_errors: tuple[str, ...] = ()
+    openmc_scatter_mgxs_type: str | None = None
+    openmc_scatter_multiplicity_weighted: bool | None = None
+    openmc_scatter_balance_dataset: str | None = None
+    openmc_scatter_contract_declared: bool | None = None
+    openmc_scatter_contract_valid: bool | None = None
+    openmc_transport_mgxs_type: str | None = None
+    openmc_transport_contract_declared: bool | None = None
     chi_checked: int = 0
     chi_sum_max_abs_error: float | None = None
     chi_sum_worst: str | None = None
@@ -74,6 +113,10 @@ class _MutablePhysicsReport:
     scatter_row_balance_worst: str | None = None
     scatter_row_balance_warnings: list[str] = field(default_factory=list)
     scatter_row_balance_errors: list[str] = field(default_factory=list)
+    scatter_contracts: list[tuple[str, _ResolvedScatterContract]] = field(
+        default_factory=list
+    )
+    scatter_contract_errors: list[str] = field(default_factory=list)
     chi_checked: int = 0
     chi_sum_max_abs_error: float | None = None
     chi_sum_worst: str | None = None
@@ -96,6 +139,46 @@ class _MutablePhysicsReport:
     transport_p1_errors: list[str] = field(default_factory=list)
 
     def freeze(self) -> MgxsPhysicsCheckReport:
+        scatter_contracts = {
+            (
+                contract.mgxs_type,
+                contract.multiplicity_weighted,
+                contract.balance_dataset,
+                contract.declared,
+            )
+            for _label, contract in self.scatter_contracts
+        }
+        common_scatter = (
+            next(iter(scatter_contracts)) if len(scatter_contracts) == 1 else None
+        )
+        resolved_transport = [
+            contract.transport_mgxs_type
+            for _label, contract in self.scatter_contracts
+        ]
+        present_transport_types = {
+            value for value in resolved_transport if value is not None
+        }
+        if not present_transport_types:
+            common_transport: tuple[str | None, bool] | None = (None, False)
+        elif len(present_transport_types) == 1 and all(
+            value is not None for value in resolved_transport
+        ):
+            common_transport = (
+                next(iter(present_transport_types)),
+                all(
+                    contract.transport_declared
+                    for _label, contract in self.scatter_contracts
+                ),
+            )
+        elif len(present_transport_types) == 1:
+            # A P0 handoff may legitimately carry transport_total for only a
+            # subset of calculations. There is no file-wide transport source
+            # contract in that case, but the scatter/removal contract remains
+            # valid and each present dataset is still checked locally.
+            common_transport = (None, False)
+        else:
+            common_transport = None
+        contract_present = bool(self.scatter_contracts)
         return MgxsPhysicsCheckReport(
             energy_bounds_local_count=self.energy_bounds_local_count,
             energy_bounds_consistency_errors=tuple(self.energy_bounds_consistency_errors),
@@ -105,6 +188,33 @@ class _MutablePhysicsReport:
             scatter_row_balance_worst=self.scatter_row_balance_worst,
             scatter_row_balance_warnings=tuple(self.scatter_row_balance_warnings),
             scatter_row_balance_errors=tuple(self.scatter_row_balance_errors),
+            openmc_scatter_mgxs_type=(
+                None if common_scatter is None else common_scatter[0]
+            ),
+            openmc_scatter_multiplicity_weighted=(
+                None if common_scatter is None else common_scatter[1]
+            ),
+            openmc_scatter_balance_dataset=(
+                None if common_scatter is None else common_scatter[2]
+            ),
+            openmc_scatter_contract_declared=(
+                None
+                if not contract_present
+                else (None if common_scatter is None else common_scatter[3])
+            ),
+            openmc_scatter_contract_valid=(
+                None
+                if not contract_present
+                else not self.scatter_contract_errors
+            ),
+            openmc_transport_mgxs_type=(
+                None if common_transport is None else common_transport[0]
+            ),
+            openmc_transport_contract_declared=(
+                None
+                if not contract_present
+                else (None if common_transport is None else common_transport[1])
+            ),
             chi_checked=self.chi_checked,
             chi_sum_max_abs_error=self.chi_sum_max_abs_error,
             chi_sum_worst=self.chi_sum_worst,
@@ -172,7 +282,33 @@ def evaluate_mgxs_physics(
         )
         axes = _scatter_axes(group, h5, parent_group)
         total = _vector_or_none(group, "total", energy_groups)
-        absorption = _vector_or_none(group, "absorption", energy_groups)
+        scatter_contract = _scatter_balance_contract(
+            group,
+            h5,
+            parent_group,
+            transport_total_present="transport_total" in group,
+        )
+        report.scatter_contracts.append((label, scatter_contract))
+        if scatter_contract.issue is not None:
+            issue = f"{label}: {scatter_contract.issue}"
+            report.scatter_row_balance_errors.append(issue)
+            report.scatter_contract_errors.append(issue)
+        scatter_balance_name = scatter_contract.balance_dataset
+        scatter_balance = _vector_or_none(
+            group,
+            scatter_balance_name,
+            energy_groups,
+        )
+        scatter_balance_issue = _scatter_balance_vector_issue(
+            label=label,
+            contract=scatter_contract,
+            balance=scatter_balance,
+            dataset_present=scatter_balance_name in group,
+            energy_groups=energy_groups,
+        )
+        if scatter_balance_issue is not None:
+            report.scatter_row_balance_errors.append(scatter_balance_issue)
+            report.scatter_contract_errors.append(scatter_balance_issue)
         fission = _vector_or_none(group, "fission", energy_groups)
         nu_fission = _vector_or_none(group, "nu_fission", energy_groups)
         chi = _vector_or_none(group, "chi", energy_groups)
@@ -181,12 +317,13 @@ def evaluate_mgxs_physics(
         if (
             scatter_row_balance_rel is not None
             or scatter_row_balance_warn_rel is not None
-        ):
+        ) and scatter_contract.issue is None and scatter_balance_issue is None:
             _check_scatter_row_balance(
                 report,
                 label=label,
                 total=total,
-                absorption=absorption,
+                balance=scatter_balance,
+                balance_name=scatter_balance_name,
                 scatter=scatter,
                 axes=axes,
                 energy_groups=energy_groups,
@@ -228,11 +365,19 @@ def evaluate_mgxs_physics(
                     if parent_group is None
                     else None
                 ),
+                sph_applied=h5.attrs.get("sph_applied", False),
+                sph_apply_operator=h5.attrs.get("sph_apply_operator"),
+                applied_sph=(
+                    _vector_or_none(group, "applied_sph", energy_groups)
+                    if getattr(group.get("applied_sph"), "shape", None) == (energy_groups,)
+                    else None
+                ),
                 threshold=transport_p1_rel,
             )
 
     if require_adf_face_consistency:
         _finalize_adf_faces(report, adf_names_by_calc)
+    _finalize_scatter_contract_consistency(report)
     return report.freeze()
 
 
@@ -307,12 +452,34 @@ def _check_one_local_energy_bounds(
         )
 
 
+def _scatter_balance_vector_issue(
+    *,
+    label: str,
+    contract: _ResolvedScatterContract,
+    balance: np.ndarray | None,
+    dataset_present: bool,
+    energy_groups: int,
+) -> str | None:
+    if contract.issue is not None or contract.balance_dataset != "reduced_absorption":
+        return None
+    if balance is not None and np.all(np.isfinite(balance)):
+        return None
+    qualifier = "missing" if not dataset_present else "invalid"
+    mgxs_label = contract.mgxs_type or "nu-weighted scatter matrix"
+    return (
+        f"{label}: explicit nu-weighted OpenMC scattering {mgxs_label!r} "
+        "requires a finite reduced_absorption vector "
+        f"with {energy_groups} values; dataset is {qualifier}"
+    )
+
+
 def _check_scatter_row_balance(
     report: _MutablePhysicsReport,
     *,
     label: str,
     total: np.ndarray | None,
-    absorption: np.ndarray | None,
+    balance: np.ndarray | None,
+    balance_name: str,
     scatter: np.ndarray | None,
     axes: str | None,
     energy_groups: int,
@@ -320,19 +487,17 @@ def _check_scatter_row_balance(
     fail_threshold: float | None,
     warn_threshold: float | None,
 ) -> None:
-    if total is None or absorption is None or scatter is None:
+    if balance is None or not np.all(np.isfinite(balance)):
+        return
+    if total is None or scatter is None:
         return
     p0 = p0_scatter_matrix(scatter, axes, energy_groups, legendre_order)
     if p0 is None:
         return
-    if not (
-        np.all(np.isfinite(total))
-        and np.all(np.isfinite(absorption))
-        and np.all(np.isfinite(p0))
-    ):
+    if not (np.all(np.isfinite(total)) and np.all(np.isfinite(p0))):
         return
     report.scatter_row_balance_checked += 1
-    residual = total - absorption - p0.sum(axis=1)
+    residual = total - balance - p0.sum(axis=1)
     rel, max_abs, max_rel, index = _relative_worst(residual, total)
     del rel
     _update_worst(
@@ -346,7 +511,8 @@ def _check_scatter_row_balance(
     )
     detail = (
         "scatter row-balance max relative residual "
-        f"{max_rel:.6e} (abs {max_abs:.6e}) at {label}: group={index + 1}"
+        f"{max_rel:.6e} (abs {max_abs:.6e}) at {label}: group={index + 1} "
+        f"using {balance_name}"
     )
     if fail_threshold is not None and max_rel > fail_threshold:
         report.scatter_row_balance_errors.append(
@@ -356,6 +522,35 @@ def _check_scatter_row_balance(
         report.scatter_row_balance_warnings.append(
             f"{detail} exceeds warn threshold {warn_threshold:.6e}"
         )
+
+
+def _finalize_scatter_contract_consistency(
+    report: _MutablePhysicsReport,
+) -> None:
+    contracts: dict[tuple[str | None, bool, str, bool], list[str]] = {}
+    for label, contract in report.scatter_contracts:
+        key = (
+            contract.mgxs_type,
+            contract.multiplicity_weighted,
+            contract.balance_dataset,
+            contract.declared,
+        )
+        contracts.setdefault(key, []).append(label)
+    if len(contracts) <= 1:
+        return
+    detail = "; ".join(
+        f"type={mgxs_type!r}, multiplicity_weighted={weighted}, "
+        f"balance={balance!r}, declared={declared} at {','.join(labels)}"
+        for (mgxs_type, weighted, balance, declared), labels in contracts.items()
+    )
+    report.scatter_row_balance_errors.append(
+        "inconsistent resolved OpenMC scatter contract across calculations: "
+        f"{detail}"
+    )
+    report.scatter_contract_errors.append(
+        "inconsistent resolved OpenMC scatter contract across calculations: "
+        f"{detail}"
+    )
 
 
 def _check_chi(
@@ -481,6 +676,9 @@ def _check_transport_p1(
     energy_groups: int,
     legendre_order: int,
     reference_flux: np.ndarray | None,
+    sph_applied: Any,
+    sph_apply_operator: Any,
+    applied_sph: np.ndarray | None,
     threshold: float,
 ) -> None:
     if total is None or transport_total is None or scatter is None:
@@ -488,6 +686,45 @@ def _check_transport_p1(
     p1 = scatter_moment_matrix(scatter, axes, energy_groups, legendre_order, moment=1)
     if p1 is None:
         return
+    try:
+        has_applied_sph = _scatter_multiplicity_bool(sph_applied)
+    except (TypeError, ValueError, OverflowError):
+        report.transport_p1_errors.append(
+            f"{label}: transport/P1 validation requires an explicit boolean sph_applied"
+        )
+        return
+    if has_applied_sph:
+        if _attr_text(sph_apply_operator) != "divide-xs-by-nsph":
+            report.transport_p1_errors.append(
+                f"{label}: transport/P1 validation cannot interpret SPH-applied "
+                "cross sections without sph_apply_operator='divide-xs-by-nsph'"
+            )
+            return
+        if (
+            applied_sph is None
+            or not np.all(np.isfinite(applied_sph))
+            or np.any(applied_sph <= 0.0)
+        ):
+            report.transport_p1_errors.append(
+                f"{label}: transport/P1 validation of SPH-applied cross sections "
+                f"requires a finite positive applied_sph vector with {energy_groups} values"
+            )
+            return
+        if reference_flux is not None:
+            # The supported SPH operator divides total, TransportXS, and
+            # incoming P1 rows by NSPH. Its TransportXS identity therefore
+            # uses phi_check = NSPH * phi_CE: the incoming factors cancel
+            # while the outgoing denominator supplies the same NSPH divisor
+            # as the stored transport vector. This algebraic audit leaves
+            # the frozen CE reference flux and all XS datasets unchanged.
+            with np.errstate(over="ignore", invalid="ignore"):
+                reference_flux = reference_flux * applied_sph
+            if not np.all(np.isfinite(reference_flux)) or np.any(reference_flux <= 0.0):
+                report.transport_p1_errors.append(
+                    f"{label}: applied_sph times reference flux is non-positive or non-finite "
+                    "during transport/P1 validation"
+                )
+                return
     # OpenMC's transport correction is an outgoing-group quantity.  It needs
     # the incoming-group flux used to tally P1; a bare row sum is not the
     # TransportXS definition and can produce large false failures.  A
@@ -677,6 +914,197 @@ def _scatter_axes(group: Any, h5: Any, parent_group: Any | None) -> str | None:
             if key in source:
                 return _attr_text(source[key])
     return None
+
+
+def _scatter_balance_contract(
+    group: Any,
+    h5: Any,
+    parent_group: Any | None,
+    *,
+    transport_total_present: bool,
+) -> _ResolvedScatterContract:
+    mgxs_type, issues = _consistent_inherited_scatter_attr(
+        group,
+        h5,
+        parent_group,
+        "openmc_scatter_mgxs_type",
+        _canonical_scatter_mgxs_type,
+    )
+    weighted, weighted_issues = _consistent_inherited_scatter_attr(
+        group,
+        h5,
+        parent_group,
+        "openmc_scatter_multiplicity_weighted",
+        _scatter_multiplicity_bool,
+    )
+    balance, balance_issues = _consistent_inherited_scatter_attr(
+        group,
+        h5,
+        parent_group,
+        "openmc_scatter_balance_dataset",
+        _scatter_balance_dataset,
+    )
+    issues.extend(weighted_issues)
+    issues.extend(balance_issues)
+    transport, transport_issues = _consistent_inherited_scatter_attr(
+        group,
+        h5,
+        parent_group,
+        "openmc_transport_mgxs_type",
+        _canonical_transport_mgxs_type,
+    )
+    issues.extend(transport_issues)
+    transport_declared = transport is not None
+    declared = mgxs_type is not None or weighted is not None or balance is not None
+
+    if mgxs_type is not None:
+        expected_weighted = (
+            _normalize_openmc_mgxs_type(mgxs_type)
+            in NU_WEIGHTED_OPENMC_SCATTER_MGXS_TYPES
+        )
+        expected_balance = (
+            "reduced_absorption" if expected_weighted else "absorption"
+        )
+        if weighted is not None and weighted != expected_weighted:
+            issues.append(
+                "openmc_scatter_multiplicity_weighted contradicts "
+                f"openmc_scatter_mgxs_type {mgxs_type!r}"
+            )
+        if balance is not None and balance != expected_balance:
+            issues.append(
+                "openmc_scatter_balance_dataset contradicts "
+                f"openmc_scatter_mgxs_type {mgxs_type!r}; expected "
+                f"{expected_balance!r}"
+            )
+        weighted = expected_weighted
+        balance = expected_balance
+    else:
+        # Files written before estimator metadata existed used ordinary,
+        # non-multiplicity-weighted scattering. Preserve that legacy meaning.
+        if weighted is None and balance is None:
+            weighted = False
+            balance = "absorption"
+        elif weighted is None:
+            weighted = balance == "reduced_absorption"
+        elif balance is None:
+            balance = "reduced_absorption" if weighted else "absorption"
+        elif weighted != (balance == "reduced_absorption"):
+            issues.append(
+                "openmc_scatter_multiplicity_weighted contradicts "
+                f"openmc_scatter_balance_dataset {balance!r}"
+            )
+
+    expected_transport = "nu-transport" if weighted else "transport"
+    if transport is not None:
+        if transport != expected_transport:
+            issues.append(
+                f"openmc_transport_mgxs_type {transport!r} contradicts the "
+                f"resolved scattering convention; expected {expected_transport!r}"
+            )
+        if not transport_total_present:
+            issues.append(
+                f"openmc_transport_mgxs_type {transport!r} is declared but "
+                "transport_total is missing"
+            )
+    elif transport_total_present:
+        if weighted:
+            issues.append(
+                "nu-weighted scattering with transport_total requires an explicit "
+                "openmc_transport_mgxs_type='nu-transport'; an older ordinary "
+                "TransportXS cannot be inferred as multiplicity-weighted"
+            )
+        else:
+            # Legacy ordinary-scatter handoffs predate transport estimator
+            # metadata. Their transport_total can only have come from the
+            # ordinary OpenMC TransportXS supported at that time.
+            transport = "transport"
+
+    return _ResolvedScatterContract(
+        mgxs_type=mgxs_type,
+        multiplicity_weighted=bool(weighted),
+        balance_dataset=str(balance),
+        declared=declared,
+        transport_mgxs_type=transport,
+        transport_declared=transport_declared,
+        issue="; ".join(issues) or None,
+    )
+
+
+def _consistent_inherited_scatter_attr(
+    group: Any,
+    h5: Any,
+    parent_group: Any | None,
+    name: str,
+    parser: Any,
+) -> tuple[Any | None, list[str]]:
+    sources = [("calculation", group.attrs)]
+    if parent_group is not None:
+        sources.append(("mixture", parent_group.attrs))
+    sources.append(("root", h5.attrs))
+    declarations: list[tuple[str, Any]] = []
+    issues: list[str] = []
+    for scope, attrs in sources:
+        if name not in attrs:
+            continue
+        try:
+            declarations.append((scope, parser(attrs[name])))
+        except (TypeError, ValueError, OverflowError) as exc:
+            issues.append(f"invalid {scope} {name}: {exc}")
+    if not declarations:
+        return None, issues
+    first = declarations[0][1]
+    if any(value != first for _scope, value in declarations[1:]):
+        detail = ", ".join(
+            f"{scope}={value!r}" for scope, value in declarations
+        )
+        issues.append(f"contradictory inherited {name} declarations: {detail}")
+    return first, issues
+
+
+def _canonical_scatter_mgxs_type(value: Any) -> str:
+    normalized = _normalize_openmc_mgxs_type(_attr_text(value))
+    if normalized in ORDINARY_OPENMC_SCATTER_MGXS_TYPES:
+        return normalized
+    if normalized in NU_WEIGHTED_OPENMC_SCATTER_MGXS_TYPES:
+        return normalized.replace("nu scatter", "nu-scatter")
+    raise ValueError(
+        f"unsupported value {_attr_text(value)!r}; expected ordinary "
+        "'scatter matrix' / 'consistent scatter matrix' or nu-weighted "
+        "'nu-scatter matrix' / 'consistent nu-scatter matrix'"
+    )
+
+
+def _canonical_transport_mgxs_type(value: Any) -> str:
+    normalized = _normalize_openmc_mgxs_type(_attr_text(value))
+    if normalized not in OPENMC_TRANSPORT_MGXS_TYPES:
+        raise ValueError(
+            f"unsupported value {_attr_text(value)!r}; expected "
+            "'transport' or 'nu-transport'"
+        )
+    return "nu-transport" if normalized == "nu transport" else "transport"
+
+
+def _scatter_multiplicity_bool(value: Any) -> bool:
+    array = np.asarray(value)
+    if array.size != 1:
+        raise ValueError("must be a scalar boolean")
+    scalar = array.reshape(-1)[0]
+    if isinstance(scalar, (bool, np.bool_)):
+        return bool(scalar)
+    if isinstance(scalar, (int, np.integer)) and scalar in (0, 1):
+        return bool(scalar)
+    raise ValueError("must be boolean true/false (or integer 1/0)")
+
+
+def _scatter_balance_dataset(value: Any) -> str:
+    balance = _attr_text(value).strip()
+    if balance not in OPENMC_SCATTER_BALANCE_DATASETS:
+        raise ValueError("must be 'absorption' or 'reduced_absorption'")
+    return balance
+
+
+def _normalize_openmc_mgxs_type(value: str) -> str:
+    return " ".join(value.strip().lower().replace("_", " ").replace("-", " ").split())
 
 
 def _adf_names(group: Any) -> tuple[str, ...]:

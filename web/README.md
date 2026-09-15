@@ -13,12 +13,18 @@ older five-colorset reuse map is a withdrawn diagnostic, not an executable
 product or acceptance route. Command catalogs, builders, and PyGan diagnostics
 remain under advanced tools.
 
-The primary physical-equivalence route is Converter reference MACROLIB ->
-native DRAGON `SPH:` -> independent validation. That native-SPH acceptance
-route forbids ADF substitution and fitted empirical/global eigenvalue
-coefficients. Generic ADF/DF carry and sidecar helpers remain advanced support
-tools for other explicitly declared workflows; they do not weaken the
-native-SPH policy.
+The recommended physical-equivalence route is a heterogeneous OpenMC CE fine
+reference -> homogenized OpenMC MG coarse model -> iterative rate-preserving
+SPH -> corrected converter-layout HDF5 -> Converter. The CE and MG geometries
+are intentionally different; the contract aligns energy-group definitions and
+tally bins, physical state, boundary conditions, and the declared fine-to-coarse
+domain mapping. Converter is the formal handoff boundary only after the
+corrected HDF5 exists.
+
+Native DRAGON `SPH:` remains available under Advanced for an explicitly
+declared, project-specific route; it is not the default. Generic ADF/DF carry
+and sidecar helpers remain advanced support tools for other explicitly declared
+workflows.
 
 ## Local development
 
@@ -120,7 +126,7 @@ web/
     commands/page.tsx /commands (CLI/web command catalog)
     convert/page.tsx  /convert (generic HDF5 -> checked object + receipt)
     openmc/page.tsx   /openmc (generic OpenMC handoff preparation)
-    equivalence/      /equivalence (native DRAGON SPH runner/validator; optional OpenMC-side and ADF support)
+    equivalence/      /equivalence (recommended OpenMC CE/MG rate-preserving SPH; advanced native DRAGON SPH and ADF support)
     donjon/page.tsx   /donjon (generic consumer guide; IRENA template mode optional)
     inspect/page.tsx  /inspect (read-only generic HDF5 structure + MGXS visualizations)
     projects/page.tsx /projects (create, edit, and inspect manifest-driven projects)

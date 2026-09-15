@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   LIVE_OPENMC_SPH_DEMO,
   MOCK_OPENMC_SPH_DEMO,
-  openmcSphBundleHref,
-  openmcSphConvertHref,
   openmcSphEvidenceHref,
   openmcSphPlannerPrefill,
 } from "./openmcSphDemo";
@@ -22,17 +20,16 @@ describe("openmcSphDemo", () => {
     expect(prefill.sphSource).toBe(MOCK_OPENMC_SPH_DEMO.sphSidecar);
   });
 
-  it("keeps the intermediate HDF5 raw so the plan injects SPH exactly once", () => {
+  it("keeps the intermediate HDF5 raw so diagnostic augmentation happens once", () => {
     for (const preset of [MOCK_OPENMC_SPH_DEMO, LIVE_OPENMC_SPH_DEMO]) {
       const prefill = openmcSphPlannerPrefill(preset);
 
-      // The planned export must not overwrite the corrected artifact, and
-      // the augment step must not re-inject SPH into an already-corrected
-      // file.
+      // The planned export must not overwrite the factor-bearing diagnostic
+      // artifact or attach the same sidecar twice.
       expect(prefill.keepHdf5Path).not.toBe(preset.augmentedH5);
       // The backend derives the augmented handoff by appending `_sph` to
-      // the intermediate stem; the result must be the corrected artifact
-      // the rest of the page (and the mock tree / fixture) names.
+      // the intermediate stem; the result must be the diagnostic artifact
+      // the mock tree and fixture name.
       expect(prefill.keepHdf5Path.replace(/\.h5$/, "_sph.h5")).toBe(
         preset.augmentedH5,
       );
@@ -50,7 +47,7 @@ describe("openmcSphDemo", () => {
     expect(prefill.statepointPath).toBe(MOCK_OPENMC_SPH_DEMO.ceStatepoint);
   });
 
-  it("builds the three-link demo mainline from evidence to converter to bundle", () => {
+  it("links demo evidence without bypassing apply-sph into Converter", () => {
     const evidence = new URL(
       openmcSphEvidenceHref(MOCK_OPENMC_SPH_DEMO),
       "http://localhost:3000",
@@ -61,30 +58,9 @@ describe("openmcSphDemo", () => {
     expect(evidence.searchParams.get("summary")).toBe(
       MOCK_OPENMC_SPH_DEMO.physicsSummary,
     );
-
-    const convert = new URL(
-      openmcSphConvertHref(MOCK_OPENMC_SPH_DEMO),
-      "http://localhost:3000",
+    expect(MOCK_OPENMC_SPH_DEMO.description).toContain(
+      "before entering Converter",
     );
-    expect(convert.pathname).toBe("/convert");
-    expect(convert.searchParams.get("intent")).toBe("openmc-sph");
-    expect(convert.searchParams.get("input")).toBe(MOCK_OPENMC_SPH_DEMO.augmentedH5);
-    expect(convert.searchParams.get("output")).toBe(MOCK_OPENMC_SPH_DEMO.ascii);
-    expect(convert.searchParams.get("format")).toBe("macrolib");
-    expect(convert.searchParams.get("production")).toBe("1");
-    // Terminology: the augmented file is "SPH-augmented", never "corrected".
-    expect(convert.searchParams.get("comment")).toBe(
-      "OpenMC-side SPH-augmented handoff",
-    );
-
-    const bundle = new URL(
-      openmcSphBundleHref(MOCK_OPENMC_SPH_DEMO),
-      "http://localhost:3000",
-    );
-    expect(bundle.pathname).toBe("/builder");
-    expect(bundle.searchParams.get("command")).toBe("bundle");
-    expect(bundle.searchParams.get("mgxs")).toBe(MOCK_OPENMC_SPH_DEMO.augmentedH5);
-    expect(bundle.searchParams.get("macrolib")).toBe(MOCK_OPENMC_SPH_DEMO.ascii);
   });
 
   it("calls the augmented artifacts SPH-augmented, not corrected", () => {

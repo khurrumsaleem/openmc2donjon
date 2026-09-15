@@ -19,6 +19,10 @@ class OpenMCRecipeTemplateTests(unittest.TestCase):
         self.assertIn("def extra_tallies(library):", text)
         self.assertIn("volume=domain_volume_cm3(domain)", text)
         self.assertIn('"scatter matrix"', text)
+        self.assertIn("USE_FAST_SPECTRUM_NU_SCATTER", text)
+        self.assertIn('"reduced absorption"', text)
+        self.assertIn('"consistent nu-scatter matrix"', text)
+        self.assertIn('"nu-transport" if USE_FAST_SPECTRUM_NU_SCATTER', text)
         self.assertIn("def provenance_files():", text)
         self.assertIn("def provenance_metadata():", text)
         self.assertIn("SETTINGS_XML", text)
@@ -35,6 +39,7 @@ class OpenMCRecipeTemplateTests(unittest.TestCase):
         self.assertIn("DOMAIN_VOLUME_BY_ID_CM3", text)
         self.assertIn("openmc_provenance.json", text)
         self.assertIn("does not rerun OpenMC", text)
+        self.assertIn('"nu-transport"', text)
 
 
 def _template_dir() -> Path:

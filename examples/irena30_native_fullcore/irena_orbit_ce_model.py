@@ -74,6 +74,7 @@ HANDOFF_LEGENDRE_ORDER = 1
 MGXS_TYPES = [
     "total",
     "absorption",
+    "reduced absorption",
     "fission",
     "kappa-fission",
     "nu-fission",
@@ -83,7 +84,7 @@ MGXS_TYPES = [
     "consistent scatter matrix",
     "consistent nu-scatter matrix",
     "multiplicity matrix",
-    "transport",
+    "nu-transport",
 ]
 
 VOLUME_FLUX_TALLY_NAME = "irena30_fullcore_d3_orbit_volume_flux"

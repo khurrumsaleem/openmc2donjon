@@ -29,6 +29,13 @@
   "root_attrs_total": 5,
   "top_level_keys_total": 2,
   "peek_truncated": false,
+  "openmc_scatter_mgxs_type": "scatter matrix",
+  "openmc_scatter_multiplicity_weighted": false,
+  "openmc_scatter_balance_dataset": "absorption",
+  "openmc_scatter_contract_declared": true,
+  "openmc_scatter_contract_valid": true,
+  "openmc_transport_mgxs_type": "transport",
+  "openmc_transport_contract_declared": true,
   "openmc_provenance": {
     "schema": null,
     "status": "legacy",

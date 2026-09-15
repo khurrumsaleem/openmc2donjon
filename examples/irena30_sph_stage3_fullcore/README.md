@@ -2,10 +2,12 @@
 
 > **Archived rejected research line — not the current product route.** This
 > OpenMC-MG-side Stage 3 calculation is retained only as a diagnostic and
-> requires `ALLOW_REJECTED_FULLCORE_SPH=1`. The current IRENA candidate keeps
-> all 91 fine positions and uses either 91 independent domains or 21 exact D3
-> orbits pooled during OpenMC transport, followed by Converter and native
-> DRAGON full-core SPH. The older five-component reuse map is withdrawn too.
+> requires `ALLOW_REJECTED_FULLCORE_SPH=1`. A new standard-route IRENA
+> candidate must keep all 91 fine positions, use either 91 independent domains
+> or 21 exact D3 orbits pooled during OpenMC transport, solve the corresponding
+> homogenized OpenMC MG coarse core to a rate-preserving fixed point, apply the
+> factors, then pass the corrected HDF5 through Converter before DONJON
+> verification. The older five-component reuse map is withdrawn too.
 
 Third stage of the archived OpenMC-side SPH research route for IRENA-30: full-core
 equivalence on the 91-hex 2D ARI ZREFL core.  Unlike Stages 1/2

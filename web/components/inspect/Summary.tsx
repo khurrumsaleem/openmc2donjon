@@ -84,8 +84,36 @@ export default function Summary({ data }: { data: HandoffInspection }) {
             }
           />
           <Stat
-            label="Scatter"
-            value={data.scatter_shapes.length > 0 ? "available" : "—"}
+            label="Scatter / transport contract"
+            value={
+              data.scatter_shapes.length === 0
+                ? "—"
+                : data.openmc_scatter_contract_valid === false
+                  ? "invalid contract"
+                  : data.openmc_scatter_contract_declared === false
+                    ? "ordinary (legacy)"
+                    : data.openmc_scatter_multiplicity_weighted === true
+                      ? "ν-weighted"
+                      : data.openmc_scatter_multiplicity_weighted === false
+                        ? "ordinary"
+                        : "undeclared"
+            }
+            tone={
+              data.scatter_shapes.length === 0
+                ? undefined
+                : data.openmc_scatter_contract_valid === false
+                  ? "fail"
+                  : data.openmc_scatter_contract_declared === true
+                    ? "pass"
+                    : "warn"
+            }
+            detail={
+              data.scatter_shapes.length === 0
+                ? undefined
+                : data.openmc_scatter_contract_valid === false
+                  ? "Conflicting declarations, a missing required removal vector, or a mismatched TransportXS contract; production audit rejects this input."
+                  : `${data.openmc_scatter_mgxs_type ?? "OpenMC MGXS type not declared"} · balance uses ${scatterBalanceLabel(data.openmc_scatter_balance_dataset)} · transport uses ${transportContractLabel(data)}`
+            }
           />
           <Stat
             label="Use scope"
@@ -586,7 +614,7 @@ function Stat({
 }: {
   label: string;
   value: string | number;
-  tone?: InspectProductionStat["tone"];
+  tone?: InspectProductionStat["tone"] | "fail";
   detail?: string;
 }) {
   const valueClass =
@@ -594,6 +622,8 @@ function Stat({
       ? "text-emerald-300"
       : tone === "warn"
         ? "text-amber-300"
+        : tone === "fail"
+          ? "text-rose-300"
         : "";
   return (
     <div>
@@ -610,6 +640,23 @@ function Stat({
       ) : null}
     </div>
   );
+}
+
+function scatterBalanceLabel(
+  dataset: HandoffInspection["openmc_scatter_balance_dataset"],
+): string {
+  if (dataset === "reduced_absorption") return "reduced absorption";
+  if (dataset === "absorption") return "ordinary absorption";
+  return "an undeclared removal term";
+}
+
+function transportContractLabel(data: HandoffInspection): string {
+  if (!data.openmc_transport_mgxs_type) return "no TransportXS payload";
+  return `${data.openmc_transport_mgxs_type}${
+    data.openmc_transport_contract_declared === true
+      ? " (declared)"
+      : " (legacy inference)"
+  }`;
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {

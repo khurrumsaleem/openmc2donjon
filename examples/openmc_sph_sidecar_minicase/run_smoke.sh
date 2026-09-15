@@ -49,6 +49,8 @@ echo "== Compute OpenMC-side SPH sidecar =="
   --reference-flux "$CE_FLUX::openmc_volume_flux" \
   --mg-flux "$MG_FLUX::openmc_mg_flux" \
   --table-output "$SPH_TABLE" \
+  --sph-target flux \
+  --flux-normalization none \
   --damping 0.5 \
   --require-reference-flux-std-dev \
   --max-reference-flux-std-dev-rel 0.02 \
@@ -59,7 +61,7 @@ echo "== Compute OpenMC-side SPH sidecar =="
   --force
 
 echo
-echo "== Inject OpenMC-side SPH sidecar =="
+echo "== Augment with OpenMC-side SPH sidecar =="
 "$PYTHON_BIN" -m openmc2donjon.cli augment-sph "$MGXS" \
   --sph-source "$SPH_SIDECAR" \
   -o "$AUGMENTED_H5" \

@@ -37,7 +37,7 @@ const COPIES: Record<ConvertIntent, ConvertIntentCopy> = {
   },
   "openmc-sph": {
     intent: "openmc-sph",
-    eyebrow: "OpenMC-side SPH",
+    eyebrow: "Recommended OpenMC CE/MG SPH",
     title: "Convert an SPH-applied handoff",
     body:
       "Use this only after OpenMC CE/MG equivalence has converged and independently validated its physical SPH factors, and apply-sph has folded them into the HDF5 cross sections. Converter verifies that handoff and writes the DONJON-facing ASCII; it does not recompute SPH.",

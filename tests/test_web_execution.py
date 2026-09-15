@@ -33,6 +33,7 @@ from openmc2donjon.web.execution import (
     _donjon_execution_environment,
     _isolated_rdonjon_launcher_source,
     _normalize_donjon,
+    _normalize_sph_sidecar,
     _project_component_diagnostic_binding,
     _rdonjon_fixed_hook_source,
     _rdonjon_hook_wrapper_source,
@@ -1610,6 +1611,32 @@ class MockExecutionEndpointTests(unittest.TestCase):
             applied.json()["summary_path"],
             "/mock/apply_sph_summary.json",
         )
+
+    def test_sph_uncertainty_policy_is_caller_declared(self) -> None:
+        from fastapi import HTTPException
+
+        payload = {
+            "strategy": "ratio",
+            "input_h5": "/mock/mgxs_library.h5",
+            "output_path": "/mock/openmc_sph.h5",
+            "reference_flux": "/mock/openmc_ce_flux.h5::openmc_volume_flux",
+            "mg_flux": "/mock/openmc_mg_flux.h5::openmc_mg_flux",
+            "require_reference_flux_std_dev": True,
+            "max_reference_flux_std_dev_rel": 0.013,
+            "require_mg_flux_std_dev": True,
+            "max_mg_flux_std_dev_rel": 0.027,
+        }
+        normalized = _normalize_sph_sidecar(payload, HTTPException)
+        self.assertTrue(normalized["require_reference_flux_std_dev"])
+        self.assertEqual(normalized["max_reference_flux_std_dev_rel"], 0.013)
+        self.assertTrue(normalized["require_mg_flux_std_dev"])
+        self.assertEqual(normalized["max_mg_flux_std_dev_rel"], 0.027)
+
+        with self.assertRaisesRegex(HTTPException, "must be non-negative"):
+            _normalize_sph_sidecar(
+                {**payload, "max_mg_flux_std_dev_rel": -0.01},
+                HTTPException,
+            )
 
     def test_rejects_invalid_sph_damping_instead_of_falling_back(self) -> None:
         base = {

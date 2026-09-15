@@ -42,7 +42,11 @@ def build_fill_zero_flux_parser() -> argparse.ArgumentParser:
             "micro-flux bins whose rate/flux estimators are unphysical. This is a "
             "mandatory step for fast-spectrum cores whose thermal groups "
             "carry no Monte Carlo flux. Mixtures are matched to macrolib "
-            "materials through a mixture label attribute."
+            "materials through a mixture label attribute. A nu-scatter "
+            "handoff is filled only from a macrolib carrying the same explicit "
+            "openmc_scatter_* contract and a valid multiplicity_matrix; "
+            "ordinary scatter is never substituted for multiplicity-weighted "
+            "scatter."
         ),
     )
     parser.add_argument("input_h5", type=Path, help="converter MGXS HDF5 file to fill")
@@ -90,7 +94,7 @@ def build_fill_zero_flux_parser() -> argparse.ArgumentParser:
         help=(
             "also fill bins whose P0 out-scatter row exceeds total XS by "
             "more than this relative tolerance (solver-destabilizing "
-            "micro-flux noise)"
+            "micro-flux noise; ordinary scatter only)"
         ),
     )
     parser.add_argument(

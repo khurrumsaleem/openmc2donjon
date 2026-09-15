@@ -22,6 +22,13 @@ export interface BuilderField {
   flag?: string;
   positional?: number;
   required?: boolean;
+  requiredWhen?: {
+    field: string;
+    equals: string;
+  };
+  /** Boolean flag emitted immediately before this field's value flag. */
+  prefixFlag?: string;
+  validation?: "nonnegative-number";
   includeDefault?: boolean;
   repeatCsv?: boolean;
   options?: BuilderOption[];
@@ -64,10 +71,15 @@ const FORMAT_OPTIONS = [
 ] as const;
 
 const FLUX_NORMALIZATION_OPTIONS = [
-  { value: "none", label: "none" },
-  { value: "total", label: "total" },
-  { value: "power", label: "power" },
   { value: "auto", label: "auto" },
+  { value: "power", label: "power" },
+  { value: "total", label: "total" },
+  { value: "none", label: "none (diagnostic only)" },
+] as const;
+
+const SPH_TARGET_OPTIONS = [
+  { value: "rate", label: "rate (production)" },
+  { value: "flux", label: "flux (diagnostic only)" },
 ] as const;
 
 const SIGN_CONVENTION_OPTIONS = [
@@ -183,6 +195,12 @@ export const COMMAND_BUILDER_SPECS: readonly CommandBuilderSpec[] = [
       text("dataset_name", "Dataset name", "Output dataset name, e.g. openmc_volume_flux or openmc_mg_flux.", "--dataset-name"),
       text("std_dev_dataset_name", "Std-dev dataset", "Optional std_dev dataset name.", "--std-dev-dataset-name"),
       text("mixture_names", "Mixture names", "Comma-separated names when --mgxs is not supplied.", "--mixture-names"),
+      text(
+        "source_domain_ids",
+        "Source domain IDs",
+        "Optional comma-separated native tally IDs in canonical --mgxs mixture_names order. CE and MG geometries may use different ID lists; when omitted, IDs are derived from --mgxs source_domain_id metadata.",
+        "--source-domain-ids",
+      ),
       text("energy_groups", "Energy groups", "Group count when --mgxs is not supplied.", "--energy-groups"),
       text("source_group_order", "Source group order", "Metadata label for raw tally order.", "--source-group-order"),
       toggle("allow_zero_flux", "Allow zero flux", "Accept exactly-zero flux bins, e.g. fast-spectrum thermal groups.", "--allow-zero-flux"),
@@ -192,6 +210,7 @@ export const COMMAND_BUILDER_SPECS: readonly CommandBuilderSpec[] = [
     notes: [
       "Run once for the CE reference flux and once for the OpenMC MG macro flux.",
       "Use --dataset-name openmc_mg_flux for the MG macro side.",
+      "CE and MG may pass different --source-domain-ids lists; each list follows canonical mixture_names order. If omitted, the exporter derives IDs from that run's --mgxs source_domain_id metadata.",
     ],
   },
   {
@@ -280,13 +299,39 @@ export const COMMAND_BUILDER_SPECS: readonly CommandBuilderSpec[] = [
       text("damping", "Damping", "Optional multiplicative damping.", "--damping"),
       text("clip_min", "Clip min", "Optional minimum SPH value.", "--clip-min"),
       text("clip_max", "Clip max", "Optional maximum SPH value.", "--clip-max"),
-      select("flux_normalization", "Flux normalization", "Scale low-order flux before ratio.", "--flux-normalization", FLUX_NORMALIZATION_OPTIONS),
+      select("flux_normalization", "Flux normalization", "Production defaults to auto. The none mode is diagnostic only.", "--flux-normalization", FLUX_NORMALIZATION_OPTIONS),
+      select("sph_target", "SPH target", "Production uses rate preservation. Flux targeting is diagnostic only.", "--sph-target", SPH_TARGET_OPTIONS),
+      {
+        ...text(
+          "max_reference_flux_std_dev_rel",
+          "CE max relative std dev",
+          "Explicit project limit for max(CE flux std_dev / mean); no default is assumed.",
+          "--max-reference-flux-std-dev-rel",
+          "<CE_MAX_REL_STD_DEV>",
+        ),
+        requiredWhen: { field: "sph_target", equals: "rate" },
+        prefixFlag: "--require-reference-flux-std-dev",
+        validation: "nonnegative-number",
+      },
+      {
+        ...text(
+          "max_mg_flux_std_dev_rel",
+          "MG max relative std dev",
+          "Independent project limit for max(MG flux std_dev / mean); no default is assumed.",
+          "--max-mg-flux-std-dev-rel",
+          "<MG_MAX_REL_STD_DEV>",
+        ),
+        requiredWhen: { field: "sph_target", equals: "rate" },
+        prefixFlag: "--require-mg-flux-std-dev",
+        validation: "nonnegative-number",
+      },
       text("source_label", "Source label", "Provenance label recorded in the summary.", "--source-label"),
       optionPath("summary_json", "Summary JSON", "Optional iteration summary JSON.", "--summary-json", "sph_update_summary.json", JSON, false, "output"),
       toggle("force", "Force overwrite", "Allow replacing the CSV output.", "--force"),
     ],
     notes: [
-      "Use this after the fine-reference CE model and homogenized MG counterpart share the same outer boundary and project-declared domain mapping.",
+      "The heterogeneous fine CE and homogenized coarse MG geometries differ. Use this only after aligning group definitions/tally bins, physical state, boundary conditions, and the declared fine-to-coarse domain mapping.",
+      "Rate-preserving production is held until separate CE and MG maximum relative std-dev thresholds are entered; diagnostic flux targeting may omit them.",
     ],
   },
   {
@@ -421,7 +466,7 @@ export function commandBuilderStage(id: string): CommandBuilderStage {
   }
   if (id === "validate-native-sph") {
     return {
-      label: "Native DRAGON SPH",
+      label: "Advanced · native DRAGON SPH",
       summary:
         "Physical validation command: audit the Converter reference, native SPH convergence, conserved rates, and DONJON eigenvalue against OpenMC uncertainty.",
       reference: "OpenMC fine model plus the project-declared DONJON coarse model",
@@ -433,10 +478,10 @@ export function commandBuilderStage(id: string): CommandBuilderStage {
     id === "apply-sph"
   ) {
     return {
-      label: "OpenMC-side SPH",
+      label: "Recommended OpenMC CE/MG SPH",
       summary:
-        "OpenMC equivalence command: compare CE reference and MG macro flux, then write explicit SPH factors for each output region and energy group.",
-      reference: "OpenMC CE reference plus OpenMC MG macro flux on the selected group structure",
+        "OpenMC equivalence command: compare a heterogeneous CE fine reference with a homogenized MG coarse model, then write explicit rate-preserving SPH factors for each mapped domain and energy group.",
+      reference: "Different CE/MG geometries; CE tallies use MG group boundaries with aligned state/BC/domain mapping",
     };
   }
   if (
@@ -525,25 +570,42 @@ export function buildCommandCli(spec: CommandBuilderSpec, values: BuilderValues)
       continue;
     }
     const shouldEmit =
-      field.required ||
+      builderFieldIsRequired(field, values) ||
       value !== "" ||
       (field.includeDefault && stringValue(field.defaultValue) !== "");
     if (!shouldEmit) continue;
     const emitted = value || stringValue(field.defaultValue) || field.placeholder || "";
-    if (emitted !== "") pushFlagValue(tokens, field.flag, emitted);
+    if (emitted !== "") {
+      if (field.prefixFlag) tokens.push(field.prefixFlag);
+      pushFlagValue(tokens, field.flag, emitted);
+    }
   }
   return tokens.map(shellQuote).join(" ");
 }
 
 /**
- * Flag dependencies the CLI enforces but the form cannot express as
- * "required": e.g. doctor rejects --statepoint without --recipe. The
- * builder page renders these next to the CLI preview so the copied
- * command does not die on an argparse usage error.
+ * Conditional requirements, value validation, and flag dependencies that
+ * cannot be represented by a static required marker. The builder page renders
+ * these next to the CLI preview and blocks copying while any issue remains.
  */
 export function builderCliIssues(spec: CommandBuilderSpec, values: BuilderValues): string[] {
   const issues: string[] = [];
   for (const field of spec.fields) {
+    if (
+      field.requiredWhen &&
+      builderFieldIsRequired(field, values) &&
+      !fieldIsSet(field, values)
+    ) {
+      issues.push(
+        `Physical route HOLD: ${field.label} is required when ${field.requiredWhen.field}=${field.requiredWhen.equals}.`,
+      );
+    }
+    if (field.validation === "nonnegative-number" && fieldIsSet(field, values)) {
+      const parsed = Number(stringValue(values[field.name]));
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        issues.push(`${field.label} must be a finite non-negative number.`);
+      }
+    }
     if (!field.requires || !fieldIsSet(field, values)) continue;
     for (const depName of field.requires) {
       const dep = spec.fields.find((candidate) => candidate.name === depName);
@@ -554,6 +616,17 @@ export function builderCliIssues(spec: CommandBuilderSpec, values: BuilderValues
     }
   }
   return issues;
+}
+
+export function builderFieldIsRequired(
+  field: BuilderField,
+  values: BuilderValues,
+): boolean {
+  if (field.required) return true;
+  if (!field.requiredWhen) return false;
+  return (
+    stringValue(values[field.requiredWhen.field]) === field.requiredWhen.equals
+  );
 }
 
 function fieldIsSet(field: BuilderField, values: BuilderValues): boolean {

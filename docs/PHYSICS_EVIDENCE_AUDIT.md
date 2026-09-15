@@ -1,6 +1,6 @@
 # Physics Evidence Audit
 
-Date: 2026-07-16
+Date: 2026-07-24
 
 ## Current conclusion
 
@@ -8,8 +8,23 @@ The local workspace does not yet contain an accepted IRENA continuous-energy
 fine -> SPH -> full-core physics closure.
 
 ```text
-OpenMC CE fine -> Converter -> native DRAGON SPH -> DONJON SN or SPN
+heterogeneous OpenMC CE fine
+  -> homogenized OpenMC MG coarse rate-SPH iteration
+  -> corrected HDF5 -> Converter -> DONJON verification
 ```
+
+With the Converter/DONJON convention `XS_corrected = XS / NSPH`, the standard
+rate-preserving update is:
+
+```text
+next_sph = previous_sph
+           * (normalized_mg_flux / (previous_sph * ce_flux)) ** damping
+```
+
+The CE result must first be conservatively integrated onto the declared coarse
+comparison regions. A same-fine-geometry CE/MG flux comparison is useful as a
+multigroup diagnostic, but it does not demonstrate geometry-homogenization
+equivalence.
 
 The earlier IRENA `pnl_ext` and `int_ext` summaries reported converged SPH
 fixed points, but their DONJON listings contain final one-speed transport
@@ -18,12 +33,13 @@ therefore withdrawn as physics passes. The records remain useful negative
 evidence under `.openmc2donjon-runs/`, but the backend and frontend now reject
 them.
 
-Those local records are also not valid inputs for the declared IRENA 91-node core: their
-top-level colorset side is 9.9950212 cm, whereas the full-core node side is
-10.1036 cm and includes an additional catch-all sodium annulus in the assembly
-universe. The project contract now rejects this mismatch explicitly. The
-full-core component reruns use 10.1036 cm for both fine colorset domains and
-the native-SPH coarse geometry; no geometric dilution correction is inferred.
+Those local records are also not valid inputs for the declared IRENA 91-node
+core: their top-level colorset side is 9.9950212 cm, whereas the full-core node
+side is 10.1036 cm and includes an additional catch-all sodium annulus in the
+assembly universe. A valid CE/MG comparison does not require identical fine and
+coarse geometries, but it does require every coarse region to cover the same
+declared physical volume through an explicit conservative map. No geometric
+dilution correction may be inferred.
 
 The product must therefore keep these statements separate:
 
@@ -57,19 +73,22 @@ previous_sph * (normalized_mg_flux / ce_flux) ** damping
 That direction was later invalidated because the apply path divides cross
 sections by NSPH. This archive must not be presented as accepted SPH physics.
 
-### July post-fix records
+### July flux-diagnostic records
 
 `examples/openmc_ce_mg_33g_sph_minicase/PRODUCTION_EVIDENCE.md` records
-post-fix runs using:
+same-partition flux-target runs using:
 
 ```text
 previous_sph * (ce_flux / normalized_mg_flux) ** damping
 ```
 
-The bundled web JSON mirrors one of those recorded runs. The original
+That expression targets flux equality and is not the standard rate-preserving
+SPH operator above. The bundled web JSON mirrors one of those recorded runs.
+The original
 statepoints, MGXS, sidecars, summaries, and corrected MACROLIB files from the
 ephemeral system temporary directory are no longer present. The fixture is
-therefore a report/UI snapshot, not live reproducible evidence.
+therefore a report/UI snapshot and diagnostic regression, not live
+reproducible production evidence.
 
 A surviving DONJON consume listing proves that DONJON consumed NSPH in that
 specific smoke. It does not reconstruct the missing OpenMC source evidence
@@ -119,37 +138,40 @@ fine model, not copying five local component records.
 
 1. Preserve the heterogeneous OpenMC CE model, statepoint, MGXS, tallies,
    energy boundaries, region map, volumes, uncertainties, and hashes.
-2. Send the exact integrated flux, rates, group structure, and mapping through
-   Converter to produce the uncorrected reference MACROLIB. Preserve hashes and
-   compare writers when PyGan is selected.
-3. Build the DRAGON/DONJON coarse model with the exact homogenized regions,
-   solver convention, leakage/boundary treatment, and mixture mapping. An
-   OpenMC MG calculation may be recorded as a predictor, but it cannot replace
-   this downstream coarse solve.
-4. Run native DRAGON SPH with its equation and convergence target declared
-   before execution. No empirical global multiplier or numerical exemption is
+2. Declare a complete, non-overlapping, conservative comparison-domain map from
+   the heterogeneous CE geometry to the homogenized OpenMC MG geometry. Match
+   energy groups, physical state, boundary conditions, and normalization.
+3. Build and run the OpenMC MG coarse model, compute the rate-preserving update,
+   apply `XS / NSPH`, and repeat until the predeclared fixed-point criterion
+   passes. No ADF, empirical global multiplier, or numerical exemption is
    allowed.
-5. Run DONJON verification on the matching coarse component with identical
-   geometry, boundary conditions, groups, solver, and normalization.
+4. Apply the converged factors to the Converter-facing HDF5. Send the corrected
+   HDF5 through Converter and preserve the hash-linked receipt; compare writers
+   when PyGan is selected.
+5. Run DONJON verification on the corresponding coarse problem without fitting
+   any factor to its result.
 6. Compare reaction rates by region and group, normalized flux shape, balance,
    and k-effective where meaningful. Apply Monte Carlo uncertainty and
    predeclared tolerances. A k-effective number alone is not acceptance.
 7. Preserve the complete evidence bundle in a durable project directory, then
    mark only the layers that actually passed.
 
-The IRENA implementation under `examples/irena30_native_fullcore/` now keeps
-all 91 heterogeneous assemblies in OpenMC and either retains 91 independent
-domains or pools tallies during transport on 21 exact global D3 symmetry
-orbits. The older 13 local neighbor signatures overmerge six global classes;
-the five-material component route overmerges further and remains diagnostic
-only. The Converter reference, native full-core SPH, and DONJON result must
-then pass joint k-effective, leakage, normalized 91-position power,
+The advanced external-solver work under `examples/irena30_native_fullcore/`
+keeps all 91 heterogeneous assemblies in OpenMC and either retains 91
+independent domains or pools tallies during transport on 21 exact global D3
+symmetry orbits. It remains research/validator evidence, not the standard SPH
+route and not an accepted result. The older 13 local neighbor signatures
+overmerge six global classes; the five-material component route overmerges
+further and remains diagnostic only. Any future standard or advanced candidate
+must pass joint k-effective, leakage, normalized 91-position power,
 statistical-quality, and numerical-convergence gates. IRENA's counts remain
 example data, never product defaults.
 
 ## Product implication
 
-Converter remains the required handoff core. OpenMC MGXS, SPH, Project, PyGan,
-and DONJON are modules around it. The UI must show evidence provenance and the
-five evidence layers on every result page; fixtures and missing source
+Converter remains the required handoff core. The standard SPH operator is the
+OpenMC CE fine/OpenMC MG coarse rate-preserving iteration; native DRAGON is an
+advanced external-solver project option. OpenMC MGXS, SPH, Project, PyGan, and
+DONJON are modules around Converter. The UI must show evidence provenance and
+the five evidence layers on every result page; fixtures and missing source
 artifacts must never receive a physics PASS.

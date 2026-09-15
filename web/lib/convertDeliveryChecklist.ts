@@ -74,7 +74,7 @@ function gatesItem(
       label: "Checks",
       title: "Production checks not run",
       body:
-        "Enable Preflight (--check) and Production checks (--production) to record the Converter input-contract decision. Downstream SPH or project physics acceptance is a separate gate.",
+        "Enable Preflight (--check) and Production checks (--production) to record the Converter input-contract decision. Any required SPH is an upstream input gate; downstream model or reactor acceptance remains separate.",
       status: data.ok ? "skipped" : "pending",
     };
   }
@@ -178,7 +178,7 @@ function donjonItem(
       title: downstream?.title ?? "DONJON deck setup is available",
       body:
         downstream?.body ??
-        "Open the DONJON guide to build a deck skeleton or ingest smoke for this ASCII output. This action does not claim downstream SPH or model-physics acceptance.",
+        "Open the DONJON guide to build a deck skeleton or ingest smoke for this ASCII output. Required SPH was an upstream input gate; this action does not claim downstream model or reactor acceptance.",
       status: "ready",
       href: downstream?.href ?? convertDonjonGuideHref(data),
     };

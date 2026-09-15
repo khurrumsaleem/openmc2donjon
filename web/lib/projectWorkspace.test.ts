@@ -15,6 +15,7 @@ import {
   projectComponentConvertHref,
   projectComponentEquivalenceHref,
   projectComponentPrepareHref,
+  projectComponentStartHref,
   projectConsumerActionLabel,
   projectConsumerHref,
   projectCoreHref,
@@ -254,6 +255,8 @@ describe("projectWorkspace", () => {
         output: "/runs/a/outputs/assembly-a.macrolib.txt",
         evidence: [],
       },
+      handoff: { state: "missing", issues: [] },
+      evidence: { state: "not-required" },
     } as unknown as ProjectComponentStatus;
 
     expect(isPhysicalSphContract(component.contract)).toBe(true);
@@ -265,10 +268,10 @@ describe("projectWorkspace", () => {
       "colorset=",
     );
     expect(projectComponentPrepareHref("/runs/a", component)).toContain(
-      "equivalence=direct",
+      "equivalence=sph",
     );
     expect(projectComponentPrepareHref("/runs/a", component)).not.toContain(
-      "equivalence=sph",
+      "equivalence=direct",
     );
     expect(
       new URL(
@@ -288,7 +291,27 @@ describe("projectWorkspace", () => {
     expect(projectComponentEquivalenceHref("/runs/a", component)).toContain(
       "kind=openmc-sph-sidecar",
     );
-    expect(projectEquivalenceActionLabel(component.contract)).toBe("Physical SPH");
+    expect(
+      new URL(projectComponentStartHref("/runs/a", component), "http://localhost")
+        .pathname,
+    ).toBe("/openmc");
+    component.handoff.state = "rejected";
+    component.handoff.issues = [
+      "sph_applied=true is required; run apply-sph before Converter",
+    ];
+    expect(
+      new URL(projectComponentStartHref("/runs/a", component), "http://localhost")
+        .pathname,
+    ).toBe("/equivalence");
+    component.handoff.state = "accepted";
+    component.handoff.issues = [];
+    expect(
+      new URL(projectComponentStartHref("/runs/a", component), "http://localhost")
+        .pathname,
+    ).toBe("/convert");
+    expect(projectEquivalenceActionLabel(component.contract)).toBe(
+      "Recommended CE/MG SPH",
+    );
   });
 
   it("keeps the archived IRENA colorset project diagnostic-only", () => {
@@ -346,7 +369,7 @@ describe("projectWorkspace", () => {
     ).toBe(false);
   });
 
-  it("routes native SPH through Converter before the separate physical-equivalence step", () => {
+  it("keeps an explicitly selected native SPH contract on its advanced Converter-first route", () => {
     const component = {
       id: "shield",
       contract: "native-sph",
@@ -459,7 +482,9 @@ describe("projectWorkspace", () => {
     expect(prepare.searchParams.get("output")).toBe(
       "/runs/a/outputs/shield.reference.macrolib.txt",
     );
-    expect(projectEquivalenceActionLabel(component.contract)).toBe("Native SPH");
+    expect(projectEquivalenceActionLabel(component.contract)).toBe(
+      "Advanced native SPH",
+    );
 
     const entries = projectNativeSphEntryHrefs("/runs/a", [component]);
     const entryConvert = new URL(entries.converterHref!, "http://localhost");

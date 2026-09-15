@@ -1,25 +1,29 @@
-# OpenMC CE/MG SPH Production Evidence
+# OpenMC CE/MG SPH Diagnostic Handoff Evidence
 
 This note is the short, presentation-ready evidence package for the
 OpenMC-side SPH minicase.  The bundled web fixture
 `src/openmc2donjon/web/fixtures/openmc_sph_physics_summary.json` mirrors the
-two-region production probe summarized below.
+two-region high-statistics diagnostic summarized below.  This filename is
+retained for existing links; the contents are not a production physical-SPH
+acceptance record.
 
-## Claim
+## Scope
 
-The minicase demonstrates that openmc2donjon can carry an OpenMC-side SPH
-handoff into DONJON ASCII:
+The minicase demonstrates that openmc2donjon can carry a diagnostic
+OpenMC-side SPH payload into DONJON ASCII:
 
 ```text
 OpenMC CE reference
-  + OpenMC MG macro solve on the same geometry and output regions
-  -> OpenMC-side SPH(region, group)
+  + OpenMC MG macro solve on the same test partition
+  -> diagnostic flux-target SPH(region, group)
   -> MGXS HDF5 augmented with SPH metadata
   -> L_MACROLIB ASCII with GROUP/*/NSPH for DONJON consumption
 ```
 
-This is not a DONJON feedback loop.  DONJON is the downstream deterministic
-consumer of the corrected handoff.
+This is not a DONJON feedback loop. DONJON is the downstream deterministic
+consumer of the corrected handoff. Because this fixture reuses the same
+spatial partition and selects the flux target, it is loop/handoff evidence,
+not accepted physical homogenization evidence.
 
 ## Update Direction Fix (2026-07)
 
@@ -31,21 +35,21 @@ the CE reference.  The fixed update is
 `next_sph = previous_sph * (ce_flux / normalized_mg_flux) ** damping`,
 whose fixed point makes the corrected OpenMC MG flux equal the CE
 reference.  All evidence recorded before the fix (including the previous
-one-shot production tables, the iterative "negative result", and the
+one-shot high-statistics tables, the iterative "negative result", and the
 damping-sweep conclusions) documented factors with the inverted sign and
 has been invalidated; every number in this note comes from post-fix reruns
 with `SPH_ITERATIONS=3`.
 
 ## Equivalence Target Choice
 
-The workflow default is `--sph-target flux`: its fixed point drives the
+This diagnostic explicitly selects `--sph-target flux`: its fixed point drives the
 corrected coarse-model flux to the CE reference, which is exactly what the
 DONJON solve diagnostic in this example measures (flux-shape agreement
 against the CE flux map), so the flux target is the appropriate showcase
-default here.  It does not preserve reaction rates or k: in coupled
-geometries the corrected model's k drifts with the size of the central
-homogenization defect.  Coupled-geometry k-preservation needs
-`--sph-target rate`, the classic Hebert/DRAGON rate-preserving update; see
+choice here. It does not preserve reaction rates; in coupled geometries the
+corrected model's k can drift with the size of the central homogenization
+defect. The standard product workflow therefore uses `--sph-target rate` for
+rate preservation and treats k as a downstream validation observable; see
 `examples/irena30_sph_stage2_csd/README.md` for the measured flux-vs-rate
 comparison on the IRENA colorsets.
 
@@ -74,7 +78,7 @@ Scatter treatment is intentionally split:
 The H16 histogram data is not written to DONJON as scatter data.  It is used
 inside OpenMC MG to obtain the macro flux used in the SPH update.
 
-## Two-Region SPH Production Probe
+## Two-Region High-Statistics Diagnostic
 
 The minimal Alain/Siggi-style colorset is now wired through the same route.
 It has two output regions, so the OpenMC-side equivalence produces two
@@ -91,12 +95,12 @@ SPH_ITERATIONS=3 \
 bash examples/openmc_ce_mg_33g_sph_minicase/run_workflow.sh
 ```
 
-This run reaches the same production-quality flux uncertainty threshold used
-for the rest of the minicase evidence:
+This run reaches the same 5% diagnostic flux-uncertainty threshold used for
+the rest of the high-statistics minicase evidence:
 
 | Quantity | Result |
 | --- | ---: |
-| Summary decision | `openmc_ce_mg_sph_production_quality` |
+| Historical schema decision | `openmc_ce_mg_sph_production_quality` |
 | Mixtures | 2 (`CS_FUEL`, `CS_MOD`) |
 | Energy groups | 33 |
 | CE flux max relative std dev | 0.0396835 |
@@ -114,6 +118,10 @@ flux-target update the corrected coarse flux, not the frozen-flux reaction
 rate, is driven to the CE reference (rate closure is the `--sph-target
 rate` fixed point).
 
+The decision string is retained for compatibility with existing summaries.
+Here it reports handoff completeness plus the historical statistics gate; it
+does not report fine-to-coarse, rate-preserving physical equivalence.
+
 The same DONJON `DSPH:` / `MAC:` consume smoke now auto-selects a non-unity
 target mixture, so it works for two-, three-, and five-region handoffs:
 
@@ -122,7 +130,7 @@ DONJON DSPH consumed NSPH: target_mix=1 expected_g1=1.11109312 pn=1.11109316 sn=
 DONJON MAC applied SPH: pn_ntot0_ratio=1.11109318 sn_ntot0_ratio=1.00000003
 ```
 
-## Production Run
+## High-Statistics Diagnostic Run
 
 Command used on the development machine:
 
@@ -150,10 +158,10 @@ this minicase is a simple colorset slab.
 
 | Quantity | Result |
 | --- | ---: |
-| Summary decision | `openmc_ce_mg_sph_production_quality` |
+| Historical schema decision | `openmc_ce_mg_sph_production_quality` |
 | CE flux max relative std dev | 0.0428184 |
 | MG flux max relative std dev | 0.0269931 |
-| Production flux uncertainty threshold | 0.05 |
+| Diagnostic flux uncertainty threshold | 0.05 |
 | SPH minimum | 0.965754 |
 | SPH maximum | 1.08736 |
 | Max `abs(SPH - 1)` | 0.0873624 |
@@ -176,14 +184,16 @@ Interpretation:
 - The SPH-corrected DONJON solves move k toward the OpenMC CE reference for
   both diffusion (+530 pcm) and SPN3 (+517 pcm); the low-order model defect
   of this tiny reflective slab still dominates the absolute k gap.
-- The result is production-quality for this minicase because both CE and MG
-  flux uncertainty gates are below 5%, the SPH factors are finite/positive, no
-  clipping was needed, and the ASCII handoff carries `GROUP/*/NSPH`.
+- The result meets the historical high-statistics handoff label because both
+  CE and MG flux uncertainty gates are below 5%, the SPH factors are
+  finite/positive, no clipping was needed, and the ASCII handoff carries
+  `GROUP/*/NSPH`.  These checks cover statistics and data carriage, not
+  physical-SPH acceptance.
 
-## Five-Region 2D Production Run
+## Five-Region 2D High-Statistics Diagnostic
 
 The larger five-region two-dimensional colorset has also reached the
-production-quality flux uncertainty gate:
+5% diagnostic flux-uncertainty gate:
 
 ```sh
 OPENMC2DONJON_COLORSET_VARIANT=five_region_2d \
@@ -198,10 +208,10 @@ bash examples/openmc_ce_mg_33g_sph_minicase/run_workflow.sh
 
 | Quantity | Result |
 | --- | ---: |
-| Summary decision | `openmc_ce_mg_sph_production_quality` |
+| Historical schema decision | `openmc_ce_mg_sph_production_quality` |
 | CE flux max relative std dev | 0.0406169 |
 | MG flux max relative std dev | 0.0447442 |
-| Production flux uncertainty threshold | 0.05 |
+| Diagnostic flux uncertainty threshold | 0.05 |
 | SPH minimum | 0.927331 |
 | SPH maximum | 1.13000 |
 | Max `abs(SPH - 1)` | 0.130003 |
@@ -239,12 +249,13 @@ Interpretation:
   +626 pcm SPN3, against a CE reference of 1.3741), the CE flux-shape mean and
   max residuals, and the global-normalized CE reaction-rate residual.
 - The residuals remain large because this small colorset is a stress test for
-  the handoff.  This is production-quality handoff evidence, not a final
-  deterministic benchmark.
+  the handoff.  This is high-statistics evidence for the handoff mechanics,
+  not accepted physical SPH or a deterministic benchmark.
 
 ## Iterative SPH Review
 
-All three production runs above use `SPH_ITERATIONS=3` with undamped updates
+All three high-statistics diagnostic runs above use `SPH_ITERATIONS=3` with
+undamped updates
 (`SPH_DAMPING=1.0`).  With the fixed update direction the loop is a
 contraction: the first iteration removes the systematic CE/MG defect (raw
 updates up to about 7-13% from unity), and the second and third iterations
@@ -282,8 +293,8 @@ handoff/out_with_openmc_sph.macrolib.txt
 
 It writes SPH factors as `GROUP/*/NSPH`, matching the downstream DONJON
 `DSPH:`/`MAC:` consumption route.  The MULTICOMPO file is still useful as a
-mapped/archival library, but MACROLIB is the accepted route for this SPH
-minicase.
+mapped/archival library, but MACROLIB is the checked consumption path for this
+data-carriage diagnostic.
 
 The DONJON consume smoke was run on this MACROLIB and confirmed that `DSPH:`
 reads the precomputed `NSPH` factors and that `MAC:` applies the PN correction:
@@ -333,20 +344,23 @@ is in `DONJON_SOLVE_DIAGNOSTIC.md`.
 ## What This Proves
 
 - OpenMC CE can provide converter-facing Pn MGXS and reference volume fluxes.
-- OpenMC MG can provide the macro flux on the same geometry/output regions.
+- OpenMC MG can provide the macro flux on a declared comparison-domain order.
 - openmc2donjon can build OpenMC-side SPH factors from those fluxes.
 - openmc2donjon can augment the MGXS HDF5 and carry NSPH into ASCII LCM.
 - DONJON can consume the exported MACROLIB `GROUP/*/NSPH` payload through
   `DSPH:`/`MAC:` in the checked smoke route.
 - DONJON can run diffusion/SPN3 low-order solves with the exported MACROLIB;
   the resulting flux-shape residuals are recorded for review.
-- The web demo fixture now reflects production-quality statistics, not only a
+- The web demo fixture reflects high-statistics recorded data, not only a
   smoke-test run.
 
 ## What This Does Not Prove
 
 - It is not a full-core benchmark.
 - It is not a DONJON k-effective validation.
+- It is not evidence for fine-geometry to coarse-geometry homogenization.
+- Its explicit flux target does not satisfy the standard rate-preserving
+  physical-SPH contract.
 - It is not a proof that one universal damping value is optimal.
 - It does not require or validate PyGan; PyGan remains optional.
 

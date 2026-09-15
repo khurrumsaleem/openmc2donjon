@@ -124,8 +124,13 @@ def build_make_openmc_sph_sidecar_parser() -> argparse.ArgumentParser:
         description=(
             "Compute SPH factors from OpenMC continuous-energy reference flux "
             "and OpenMC multi-group macro flux, then write both an auditable "
-            "CSV table and an SPH sidecar HDF5. The CE and MG calculations "
-            "must use the same geometry and output regions."
+            "CSV table and an SPH sidecar HDF5. The CE calculation uses the "
+            "detailed fine geometry and the MG calculation uses the "
+            "homogenized coarse geometry; their comparison-domain ordering, "
+            "energy-group structure, physical state, and boundary conditions "
+            "must be aligned. The production default is the "
+            "reaction-rate-preserving target; the flux target is retained for "
+            "explicit diagnostic studies."
         ),
     )
     parser.add_argument("input_h5", type=Path, help="MGXS HDF5 file used for mixture/group metadata")
@@ -164,21 +169,24 @@ def build_make_openmc_sph_sidecar_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--flux-normalization",
         choices=FLUX_NORMALIZATIONS,
-        default="none",
+        default="auto",
         help=(
-            "scale MG flux before forming the SPH ratio: none, total, power, "
-            "or auto using group-wise H-FACTOR/kappa_fission (default: none)"
+            "scale MG flux before forming the SPH ratio: auto is the "
+            "production default and resolves to power using group-wise "
+            "H-FACTOR/kappa_fission; none and total are retained for explicit "
+            "diagnostic studies (default: auto)"
         ),
     )
     parser.add_argument(
         "--sph-target",
         choices=SPH_TARGETS,
-        default="flux",
+        default="rate",
         help=(
-            "SPH fixed-point target: flux matches the corrected MG flux to "
-            "the CE reference; rate preserves reaction rates "
-            "(phi_mg = sph * reference flux) for spatially coupled regions "
-            "(default: flux)"
+            "SPH fixed-point target: rate is the production default and "
+            "preserves reaction rates (phi_mg = sph * reference flux) for "
+            "spatially coupled regions; flux matches the corrected MG flux "
+            "to the CE reference and is retained for explicit diagnostic "
+            "studies (default: rate)"
         ),
     )
     parser.add_argument(
@@ -288,7 +296,9 @@ def build_apply_sph_parser() -> argparse.ArgumentParser:
             "corrected copy. Use --input-format converter for the "
             "openmc2donjon /mixtures layout, or --input-format openmc-mgxs "
             "for OpenMC native setN mgxs.h5 files used by the next OpenMC MG "
-            "iteration. The command divides macroscopic XS datasets by NSPH."
+            "iteration. The native form is recorded as an intermediate "
+            "unbound artifact and cannot satisfy the final physical-SPH "
+            "Converter gate. The command divides macroscopic XS datasets by NSPH."
         ),
     )
     parser.add_argument("input_h5", type=Path, help="MGXS HDF5 file to correct")
@@ -298,7 +308,8 @@ def build_apply_sph_parser() -> argparse.ArgumentParser:
         default="converter",
         help=(
             "input HDF5 layout: converter for openmc2donjon /mixtures, "
-            "or openmc-mgxs for OpenMC native setN mgxs.h5 (default: converter)"
+            "or openmc-mgxs for an intermediate OpenMC native setN mgxs.h5 "
+            "(default: converter)"
         ),
     )
     parser.add_argument(
@@ -391,10 +402,12 @@ def build_make_sph_sidecar_parser() -> argparse.ArgumentParser:
         prog="openmc2donjon make-sph-sidecar",
         description=(
             "Create an SPH sidecar HDF5 from an MGXS handoff. Production SPH "
-            "factors should come from OpenMC CE reference versus OpenMC MG "
-            "macro calculations using the same geometry. Unity SPH is useful "
-            "for plumbing; table mode canonicalizes external SPH factors from "
-            "CSV; macrolib mode remains available for legacy NSPH extraction."
+            "factors should come from a detailed OpenMC CE fine calculation "
+            "versus a homogenized OpenMC MG coarse calculation with aligned "
+            "comparison-domain ordering, energy-group structure, physical "
+            "state, and boundary conditions. Unity SPH is useful for plumbing; "
+            "table mode canonicalizes external SPH factors from CSV; macrolib "
+            "mode remains available for legacy NSPH extraction."
         ),
     )
     parser.add_argument("input_h5", type=Path, help="MGXS HDF5 file used for mixture/group metadata")
@@ -468,8 +481,13 @@ def build_make_sph_update_table_parser() -> argparse.ArgumentParser:
         prog="openmc2donjon make-sph-update-table",
         description=(
             "Create an external SPH CSV table from OpenMC CE reference flux "
-            "and OpenMC MG macro flux using a damped flux-ratio update. The "
-            "two flux sources should use the same geometry and output regions."
+            "and OpenMC MG macro flux using a damped fixed-point update. The "
+            "production default preserves reaction rates; the flux target is "
+            "retained for explicit diagnostic studies. The CE source comes "
+            "from the detailed fine geometry and the MG source from the "
+            "homogenized coarse geometry; their comparison-domain ordering, "
+            "energy-group structure, physical state, and boundary conditions "
+            "must be aligned."
         ),
     )
     parser.add_argument("input_h5", type=Path, help="MGXS HDF5 file used for mixture/group metadata")
@@ -510,11 +528,22 @@ def build_make_sph_update_table_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--flux-normalization",
         choices=FLUX_NORMALIZATIONS,
-        default="none",
+        default="auto",
         help=(
-            "scale low-order flux before forming the SPH ratio: none, total, "
-            "power, or auto using group-wise H-FACTOR/kappa_fission "
-            "(default: none)"
+            "scale low-order flux before forming the SPH ratio: auto is the "
+            "production default and resolves to power using group-wise "
+            "H-FACTOR/kappa_fission; none and total are retained for explicit "
+            "diagnostic studies (default: auto)"
+        ),
+    )
+    parser.add_argument(
+        "--sph-target",
+        choices=SPH_TARGETS,
+        default="rate",
+        help=(
+            "SPH fixed-point target: rate is the production default and "
+            "preserves reaction rates; flux is retained for explicit "
+            "diagnostic studies (default: rate)"
         ),
     )
     parser.add_argument(
@@ -640,6 +669,7 @@ def make_sph_update_table_handler(args: argparse.Namespace) -> int:
             clip_min=args.clip_min,
             clip_max=args.clip_max,
             flux_normalization=args.flux_normalization,
+            sph_target=args.sph_target,
             source_label=args.source_label,
             force=args.force,
             summary_json=args.summary_json,

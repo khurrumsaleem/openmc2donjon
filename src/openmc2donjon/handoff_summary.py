@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .scatter_contract import scatter_contract_from_preflight
+
 
 HANDOFF_SUMMARY_SCHEMA = "openmc2donjon.handoff-summary.v1"
 HANDOFF_PASS_DECISION = "openmc2donjon_handoff_passed"
@@ -74,6 +76,9 @@ def handoff_summary_payload(
     sph_enabled: bool,
 ) -> dict[str, object]:
     manifest = _read_json_object(manifest_path)
+    check_summary = (
+        None if check_summary_json is None else _read_json_object(check_summary_json)
+    )
     ok = bundle_validation_passed is not False
     return {
         "schema": HANDOFF_SUMMARY_SCHEMA,
@@ -102,6 +107,7 @@ def handoff_summary_payload(
         "state_points": summary.get("state_points"),
         "burnup_axis": summary.get("burnup_axis"),
         "selected_mixtures": summary.get("selected_mixtures"),
+        "scatter_contract": scatter_contract_from_preflight(check_summary),
         "artifact_count": _manifest_artifact_count(manifest),
         "artifact_labels": _manifest_artifact_labels(manifest),
         "correction_artifacts": {"adf": adf_enabled, "sph": sph_enabled},

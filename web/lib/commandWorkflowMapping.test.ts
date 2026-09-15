@@ -67,6 +67,21 @@ describe("commandWorkflowMapping", () => {
     expect(mapping.requiredInputs).toContain("OpenMC CE/MG SPH table or source options");
   });
 
+  it("lists both explicit uncertainty thresholds for the physical SPH page", () => {
+    const mapping = commandWorkflowMapping(
+      command({
+        id: "make-openmc-sph-sidecar",
+        group: "sph",
+        web_path:
+          "/equivalence?kind=openmc-sph-sidecar&contract=physical-sph",
+      }),
+    );
+
+    expect(mapping.requiredInputs).toContain(
+      "Explicit CE and MG max relative std-dev project thresholds",
+    );
+  });
+
   it("describes ADF/SPH equivalence command-builder links", () => {
     const mapping = commandWorkflowMapping(
       command({

@@ -61,9 +61,11 @@ describe("equivalence command builder", () => {
         mgFlux: "/tmp/mg_flux.h5::openmc_mg_flux",
         tableOutput: "/tmp/openmc_sph.csv",
         damping: "0.5",
+        maxReferenceFluxStdDevRel: "0.03",
+        maxMgFluxStdDevRel: "0.04",
       }),
     ).toBe(
-      "openmc2donjon make-openmc-sph-sidecar /tmp/mgxs.h5 -o /tmp/openmc_sph.h5 --reference-flux /tmp/ce_flux.h5::openmc_volume_flux --mg-flux /tmp/mg_flux.h5::openmc_mg_flux --table-output /tmp/openmc_sph.csv --damping 0.5 --flux-normalization auto --sph-target rate",
+      "openmc2donjon make-openmc-sph-sidecar /tmp/mgxs.h5 -o /tmp/openmc_sph.h5 --reference-flux /tmp/ce_flux.h5::openmc_volume_flux --mg-flux /tmp/mg_flux.h5::openmc_mg_flux --table-output /tmp/openmc_sph.csv --damping 0.5 --flux-normalization auto --require-reference-flux-std-dev --max-reference-flux-std-dev-rel 0.03 --require-mg-flux-std-dev --max-mg-flux-std-dev-rel 0.04",
     );
 
     expect(
@@ -73,10 +75,12 @@ describe("equivalence command builder", () => {
         outputPath: "/tmp/openmc_sph.h5",
         referenceFlux: "/tmp/ce_flux.h5::openmc_volume_flux",
         mgFlux: "/tmp/mg_flux.h5::openmc_mg_flux",
+        maxReferenceFluxStdDevRel: "0.025",
+        maxMgFluxStdDevRel: "0.05",
         zeroFluxPolicy: "identity" as const,
       }),
     ).toBe(
-      "openmc2donjon make-openmc-sph-sidecar /tmp/mgxs.h5 -o /tmp/openmc_sph.h5 --reference-flux /tmp/ce_flux.h5::openmc_volume_flux --mg-flux /tmp/mg_flux.h5::openmc_mg_flux --damping 1.0 --flux-normalization auto --sph-target rate --zero-flux-policy identity",
+      "openmc2donjon make-openmc-sph-sidecar /tmp/mgxs.h5 -o /tmp/openmc_sph.h5 --reference-flux /tmp/ce_flux.h5::openmc_volume_flux --mg-flux /tmp/mg_flux.h5::openmc_mg_flux --damping 1.0 --flux-normalization auto --require-reference-flux-std-dev --max-reference-flux-std-dev-rel 0.025 --require-mg-flux-std-dev --max-mg-flux-std-dev-rel 0.05 --zero-flux-policy identity",
     );
 
     expect(
@@ -120,13 +124,55 @@ describe("equivalence command builder", () => {
       outputPath: "/tmp/openmc_sph.h5",
       referenceFlux: "/tmp/ce_flux.h5::openmc_volume_flux",
       mgFlux: "/tmp/mg_flux.h5::openmc_mg_flux",
+      maxReferenceFluxStdDevRel: "0.03",
+      maxMgFluxStdDevRel: "0.04",
     });
 
-    expect(command).toContain("--sph-target rate");
+    expect(command).not.toContain("--sph-target");
     expect(command).not.toContain("--freeze-groups");
     expect(command).not.toContain("--flux-floor-rel");
     expect(command).not.toContain("--clip-min");
     expect(command).not.toContain("--clip-max");
+    expect(command).toContain(
+      "--require-reference-flux-std-dev --max-reference-flux-std-dev-rel 0.03",
+    );
+    expect(command).toContain(
+      "--require-mg-flux-std-dev --max-mg-flux-std-dev-rel 0.04",
+    );
+  });
+
+  it("shows explicit threshold placeholders when production values are missing", () => {
+    const defaults = defaultEquivalenceOptions("openmc-sph-sidecar");
+    const command = buildEquivalenceCli(defaults);
+
+    expect(defaults.maxReferenceFluxStdDevRel).toBe("");
+    expect(defaults.maxMgFluxStdDevRel).toBe("");
+    expect(command).toContain(
+      "--require-reference-flux-std-dev --max-reference-flux-std-dev-rel <CE_MAX_REL_STD_DEV>",
+    );
+    expect(command).toContain(
+      "--require-mg-flux-std-dev --max-mg-flux-std-dev-rel <MG_MAX_REL_STD_DEV>",
+    );
+    expect(command).not.toContain("0.20");
+  });
+
+  it("lets explicit diagnostic flux targeting omit production uncertainty gates", () => {
+    const command = buildEquivalenceCli({
+      ...defaultEquivalenceOptions("openmc-sph-sidecar"),
+      inputH5: "/tmp/mgxs.h5",
+      outputPath: "/tmp/openmc_sph.h5",
+      referenceFlux: "/tmp/ce_flux.h5::openmc_volume_flux",
+      mgFlux: "/tmp/mg_flux.h5::openmc_mg_flux",
+      fluxNormalization: "none",
+      sphTarget: "flux",
+    });
+
+    expect(command).toContain("--flux-normalization none");
+    expect(command).toContain("--sph-target flux");
+    expect(command).not.toContain("--require-reference-flux-std-dev");
+    expect(command).not.toContain("--max-reference-flux-std-dev-rel");
+    expect(command).not.toContain("--require-mg-flux-std-dev");
+    expect(command).not.toContain("--max-mg-flux-std-dev-rel");
   });
 
   it("labels record attachment as Augment, never Inject", () => {

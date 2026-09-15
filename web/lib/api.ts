@@ -189,6 +189,18 @@ export interface HandoffInspection {
   /** Read-only execution of Converter's current canonical production policy.
    * Structural inspection can pass while this audit fails. */
   production_audit?: ConvertPreflightInput | null;
+  /** Explicit OpenMC scattering/removal pairing used by Converter's
+   * row-balance check. Older handoffs may leave these fields unknown. */
+  openmc_scatter_mgxs_type?: string | null;
+  openmc_scatter_multiplicity_weighted?: boolean | null;
+  openmc_scatter_balance_dataset?:
+    | "absorption"
+    | "reduced_absorption"
+    | null;
+  openmc_scatter_contract_declared?: boolean | null;
+  openmc_scatter_contract_valid?: boolean | null;
+  openmc_transport_mgxs_type?: string | null;
+  openmc_transport_contract_declared?: boolean | null;
   root_attr_keys: string[];
   burnup_axis: string | null;
   burnup_axis_values: number | null;
@@ -317,6 +329,9 @@ export interface CrossSections {
   total: number[] | null;
   transport_total: number[] | null;
   absorption: number[] | null;
+  /** Net/reduced absorption paired with a multiplicity-weighted nu-scatter
+   * matrix. It may legitimately be negative in fast groups. */
+  reduced_absorption: number[] | null;
   fission: number[] | null;
   nu_fission: number[] | null;
   chi: number[] | null;
@@ -947,6 +962,16 @@ export interface OpenmcSphPhysicsSummary {
 export type ConvertFormat = "multicompo" | "macrolib";
 export type ConvertWriterBackend = "ascii" | "pygan";
 
+export interface OpenmcScatterContract {
+  openmc_scatter_mgxs_type: string | null;
+  openmc_scatter_multiplicity_weighted: boolean;
+  openmc_scatter_balance_dataset: "absorption" | "reduced_absorption";
+  openmc_scatter_contract_declared: boolean;
+  openmc_scatter_contract_valid: true;
+  openmc_transport_mgxs_type: "transport" | "nu-transport" | null;
+  openmc_transport_contract_declared: boolean;
+}
+
 export interface ConvertRequest {
   input_path: string;
   output_path?: string | null;
@@ -980,6 +1005,16 @@ export interface ConvertPreflightInput {
   state_points?: number | null;
   fissionable_mixtures?: number | null;
   openmc_provenance?: OpenmcProvenance | null;
+  openmc_scatter_mgxs_type?: string | null;
+  openmc_scatter_multiplicity_weighted?: boolean | null;
+  openmc_scatter_balance_dataset?:
+    | "absorption"
+    | "reduced_absorption"
+    | null;
+  openmc_scatter_contract_declared?: boolean | null;
+  openmc_scatter_contract_valid?: boolean | null;
+  openmc_transport_mgxs_type?: "transport" | "nu-transport" | null;
+  openmc_transport_contract_declared?: boolean | null;
   adf_mixtures?: number | null;
   adf_faces?: string[];
   sph_calculations?: number | null;
@@ -1047,6 +1082,7 @@ export interface ConvertResponse {
   };
   input_path: string;
   openmc_provenance?: OpenmcProvenance | null;
+  scatter_contract?: OpenmcScatterContract | null;
   input_sha256?: string | null;
   output_path: string;
   output_sha256?: string | null;
@@ -1255,6 +1291,10 @@ export interface SphSidecarExecutionRequest {
   damping?: number;
   flux_normalization?: "none" | "total" | "power" | "auto";
   sph_target?: "flux" | "rate";
+  require_reference_flux_std_dev: boolean;
+  max_reference_flux_std_dev_rel: number | null;
+  require_mg_flux_std_dev: boolean;
+  max_mg_flux_std_dev_rel: number | null;
   zero_flux_policy?: "reject" | "identity";
   flux_floor_rel?: number | null;
   freeze_groups?: number[];

@@ -28,6 +28,12 @@ class MixtureCollapseTests(unittest.TestCase):
                 total = np.stack(
                     [np.asarray(original["mixtures"][name]["total"]) for name in ("B", "C")]
                 )
+                reduced_absorption = np.stack(
+                    [
+                        np.asarray(original["mixtures"][name]["reduced_absorption"])
+                        for name in ("B", "C")
+                    ]
+                )
                 scatter = np.stack(
                     [
                         np.asarray(original["mixtures"][name]["scatter_matrix"])
@@ -41,6 +47,10 @@ class MixtureCollapseTests(unittest.TestCase):
                 np.testing.assert_allclose(
                     np.asarray(ring["total"]) * ring_flux,
                     np.sum(total * flux, axis=0),
+                )
+                np.testing.assert_allclose(
+                    np.asarray(ring["reduced_absorption"]) * ring_flux,
+                    np.sum(reduced_absorption * flux, axis=0),
                 )
                 np.testing.assert_allclose(
                     np.asarray(ring["scatter_matrix"])[0] * ring_flux[:, np.newaxis],
@@ -59,6 +69,20 @@ class MixtureCollapseTests(unittest.TestCase):
                 )
                 self.assertEqual(float(ring.attrs["volume"]), 5.0)
                 self.assertEqual(tuple(collapsed["mixture_names"].asstr()[:]), ("CENTER", "RING"))
+                self.assertFalse(
+                    bool(collapsed.attrs["openmc_scatter_multiplicity_weighted"])
+                )
+                self.assertEqual(
+                    collapsed.attrs["openmc_scatter_balance_dataset"],
+                    "absorption",
+                )
+                self.assertFalse(
+                    bool(ring.attrs["openmc_scatter_multiplicity_weighted"])
+                )
+                self.assertEqual(
+                    ring.attrs["openmc_scatter_balance_dataset"],
+                    "absorption",
+                )
 
     def test_requires_exact_source_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,6 +94,148 @@ class MixtureCollapseTests(unittest.TestCase):
                     Path(tmp) / "bad.h5",
                     groups=(("ONLY", ("A", "B")),),
                 )
+
+    def test_rejects_mixed_scatter_contracts_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.h5"
+            output = Path(tmp) / "components.h5"
+            _write_source(source)
+            with h5py.File(source, "a") as h5:
+                ordinary = h5["mixtures/A"].attrs
+                ordinary["openmc_scatter_mgxs_type"] = "scatter matrix"
+                ordinary["openmc_scatter_multiplicity_weighted"] = False
+                ordinary["openmc_scatter_balance_dataset"] = "absorption"
+                ordinary["openmc_transport_mgxs_type"] = "transport"
+                for name in ("B", "C"):
+                    weighted = h5[f"mixtures/{name}"].attrs
+                    weighted["openmc_scatter_mgxs_type"] = (
+                        "consistent nu-scatter matrix"
+                    )
+                    weighted["openmc_scatter_multiplicity_weighted"] = True
+                    weighted["openmc_scatter_balance_dataset"] = (
+                        "reduced_absorption"
+                    )
+                    weighted["openmc_transport_mgxs_type"] = "nu-transport"
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "one coherent OpenMC scatter/removal contract",
+            ):
+                collapse_components(
+                    source,
+                    output,
+                    groups=(("CENTER", ("A",)), ("RING", ("B", "C"))),
+                )
+            self.assertFalse(output.exists())
+
+    def test_rejects_nu_scatter_missing_reduced_absorption_before_writing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.h5"
+            output = Path(tmp) / "components.h5"
+            _write_source(source)
+            with h5py.File(source, "a") as h5:
+                h5.attrs["openmc_scatter_mgxs_type"] = (
+                    "consistent nu-scatter matrix"
+                )
+                h5.attrs["openmc_scatter_multiplicity_weighted"] = True
+                h5.attrs["openmc_scatter_balance_dataset"] = "reduced_absorption"
+                h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                del h5["mixtures/B/reduced_absorption"]
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "requires a finite reduced_absorption vector",
+            ):
+                collapse_components(
+                    source,
+                    output,
+                    groups=(("CENTER", ("A",)), ("RING", ("B", "C"))),
+                )
+            self.assertFalse(output.exists())
+
+    def test_writes_one_canonical_nu_scatter_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.h5"
+            output = Path(tmp) / "components.h5"
+            _write_source(source)
+            with h5py.File(source, "a") as h5:
+                for attrs in (
+                    h5.attrs,
+                    *(group.attrs for group in h5["mixtures"].values()),
+                ):
+                    attrs["openmc_scatter_mgxs_type"] = (
+                        "consistent_nu_scatter_matrix"
+                    )
+                    attrs["openmc_scatter_multiplicity_weighted"] = True
+                    attrs["openmc_scatter_balance_dataset"] = (
+                        "reduced_absorption"
+                    )
+                    attrs["openmc_transport_mgxs_type"] = "nu-transport"
+
+            collapse_components(
+                source,
+                output,
+                groups=(("CENTER", ("A",)), ("RING", ("B", "C"))),
+            )
+
+            with h5py.File(output, "r") as collapsed:
+                expected = "consistent nu-scatter matrix"
+                self.assertEqual(
+                    collapsed.attrs["openmc_scatter_mgxs_type"], expected
+                )
+                self.assertTrue(
+                    bool(collapsed.attrs["openmc_scatter_multiplicity_weighted"])
+                )
+                self.assertEqual(
+                    collapsed.attrs["openmc_scatter_balance_dataset"],
+                    "reduced_absorption",
+                )
+                self.assertEqual(
+                    collapsed.attrs["openmc_transport_mgxs_type"],
+                    "nu-transport",
+                )
+                for group in collapsed["mixtures"].values():
+                    self.assertEqual(
+                        group.attrs["openmc_scatter_mgxs_type"], expected
+                    )
+                    self.assertTrue(
+                        bool(
+                            group.attrs[
+                                "openmc_scatter_multiplicity_weighted"
+                            ]
+                        )
+                    )
+                    self.assertEqual(
+                        group.attrs["openmc_scatter_balance_dataset"],
+                        "reduced_absorption",
+                    )
+                    self.assertEqual(
+                        group.attrs["openmc_transport_mgxs_type"],
+                        "nu-transport",
+                    )
+
+    def test_rejects_mixed_declared_and_inferred_transport_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.h5"
+            output = Path(tmp) / "components.h5"
+            _write_source(source)
+            with h5py.File(source, "a") as h5:
+                h5["mixtures/A"].attrs["openmc_transport_mgxs_type"] = (
+                    "transport"
+                )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "consistently declared or legacy-inferred",
+            ):
+                collapse_components(
+                    source,
+                    output,
+                    groups=(("CENTER", ("A",)), ("RING", ("B", "C"))),
+                )
+            self.assertFalse(output.exists())
 
 
 def _write_source(path: Path) -> None:
@@ -95,6 +261,7 @@ def _write_source(path: Path) -> None:
                 "total",
                 "transport_total",
                 "absorption",
+                "reduced_absorption",
                 "fission",
                 "nu_fission",
                 "kappa_fission",

@@ -497,7 +497,7 @@ function OpenmcPageContent() {
               href={isIrenaColorset ? "/donjon?mode=irena30-fullcore" : directConverterHref}
               className="btn btn-secondary"
             >
-              {isIrenaColorset ? "Open current IRENA route" : "Already have an HDF5"}
+              {isIrenaColorset ? "Open IRENA research template" : "Already have an HDF5"}
             </Link>
           }
         />
@@ -561,7 +561,9 @@ function OpenmcPageContent() {
               </span>
             </div>
             <p className="mt-1">
-              This page does not write DONJON ASCII. After export, Converter validates the handoff and lets you choose L_MULTICOMPO or L_MACROLIB and the ASCII or PyGan writer.
+              {equivalence === "sph"
+                ? "This page prepares the OpenMC inputs for the recommended CE/MG SPH route. Converge and apply SPH to write the corrected HDF5 before Converter validates the formal handoff."
+                : "This page does not write DONJON ASCII. A Converter-ready HDF5 can enter Converter, which validates the formal handoff and writes the selected object."}
             </p>
           </section>
 
@@ -646,7 +648,9 @@ function OpenmcPageContent() {
                 HDF5 <span className="ml-2 font-mono text-[var(--fg-1)]">{keepHdf5Path || derivedHdf5}</span>
               </div>
               <div className="rounded-md border border-[var(--edge)] bg-black/10 px-3 py-2">
-                Next: open this HDF5 in Converter and choose the downstream object there.
+                {equivalence === "sph"
+                  ? "Next: complete CE/MG SPH and apply the converged factors. Converter comes after the corrected HDF5."
+                  : "Next: if this HDF5 already satisfies every required correction, open it in Converter."}
               </div>
             </div>
             <details className="mt-3 rounded-lg border border-[var(--edge)] bg-black/10 p-3">
@@ -666,7 +670,30 @@ function OpenmcPageContent() {
           </FormStep>
 
           <section className="rounded-lg border border-cyan-300/20 bg-cyan-300/[0.045] px-3 py-3 text-[12px] leading-5 text-[var(--fg-2)]">
-            {isIrenaColorset ? <>Historical artifact names remain visible for diagnosis. There is no production SPH or Converter continuation from this withdrawn route.</> : <>This step stops at an MGXS HDF5. Continue directly to <Link href={directConverterHref} className="font-semibold text-[var(--accent-2)] hover:underline">Converter</Link>, or run the equivalence method required by your project.</>}
+            {isIrenaColorset ? (
+              <>Historical artifact names remain visible for diagnosis. There is no production SPH or Converter continuation from this withdrawn route.</>
+            ) : equivalence === "sph" ? (
+              <>
+                This step stops at the OpenMC inputs. Continue to{" "}
+                <Link href={OPENMC_SPH_SIDECAR_FORM_HREF} className="font-semibold text-[var(--accent-2)] hover:underline">
+                  CE/MG SPH
+                </Link>
+                , apply the converged factors, and only then enter Converter with the corrected HDF5.
+              </>
+            ) : (
+              <>
+                This step stops at an MGXS HDF5. If the model requires equivalence,
+                use the recommended{" "}
+                <Link href={OPENMC_SPH_SIDECAR_FORM_HREF} className="font-semibold text-[var(--accent-2)] hover:underline">
+                  CE/MG SPH route
+                </Link>
+                {" "}first; otherwise continue with the already Converter-ready HDF5 in{" "}
+                <Link href={directConverterHref} className="font-semibold text-[var(--accent-2)] hover:underline">
+                  Converter
+                </Link>
+                .
+              </>
+            )}
           </section>
 
           <details className="rounded-lg border border-[var(--edge)] bg-black/10 p-3">

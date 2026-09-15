@@ -54,6 +54,22 @@ openmc2donjon-export \
 The recipe can define `extra_tallies(...)` to append case-specific non-MGXS
 tallies, such as surface-current tallies used later for ADF/DF generation.
 
+The recipe is a separate case adapter, not a patch that must be pasted into the
+OpenMC driver, and it may live anywhere addressable by `--recipe`. An existing
+`main.py` needs no openmc2donjon-specific lines when it:
+
+1. exports the same materials/geometry/settings used by the recipe;
+2. leaves the generated `tallies.xml` in place; and
+3. runs OpenMC in that XML directory.
+
+If `main.py` instead constructs an in-memory `openmc.Model`, assigns
+`model.tallies`, or exports XML after `--write-tallies`, it may ignore or
+overwrite the generated MGXS tallies. In that case, add the recipe library's
+MGXS tallies to the model or change the order to `export model XML -> generate
+tallies.xml -> run OpenMC`. The recipe library's geometry and domain IDs must
+match the statepoint. Adding a recipe after the transport run cannot recover
+tallies that the statepoint never recorded.
+
 To export and immediately write DONJON ASCII in one command:
 
 ```sh
@@ -261,21 +277,35 @@ openmc2donjon-from-openmc \
 
 ## OpenMC-Side SPH From CE/MG Fluxes
 
-The production SPH route uses OpenMC MG as the equivalence operator upstream of
-DONJON: compare an OpenMC continuous-energy reference calculation with an
-OpenMC multi-group macro calculation on the same geometry and output regions,
-then inject the resulting SPH factors before conversion. DONJON consumes the
-precomputed `NSPH` factors or corrected handoff; it is not iterated as the SPH
-feedback operator in this route.
+The standard production SPH route uses OpenMC MG as the equivalence operator
+upstream of Converter and DONJON. Hold the heterogeneous OpenMC CE model fixed
+as the fine reference, build a homogenized OpenMC MG coarse model, and iterate
+the rate-preserving update against the MG solution.
+
+The CE and MG geometries are deliberately different. The CE geometry resolves
+the physical heterogeneity; the MG geometry replaces each declared comparison
+domain with its homogenized region. The CE tallies must use the MG transport
+group boundaries, and both calculations must represent the same physical state
+and boundary conditions. A conservative mapping assigns each fine volume and
+its integrated flux/rates to exactly one coarse comparison domain. A shared
+`(mixture, group)` output shape proves array alignment, not geometric identity.
+
+After convergence, apply the factors to the Converter-facing HDF5 and pass that
+corrected file through Converter. DONJON verifies the converted object; it is
+not the standard SPH feedback operator.
 
 Export the region/group flux tally from each OpenMC statepoint with the same
-MGXS handoff metadata:
+MGXS handoff metadata. The fine and coarse models may use different native
+OpenMC IDs. Set `CE_DOMAIN_IDS` and `MG_DOMAIN_IDS` to comma-separated IDs in
+the canonical `mixture_names` order; the exporter verifies each model's own
+mapping before writing that common order:
 
 ```sh
 openmc2donjon export-volume-flux ce_statepoint.h5 \
   --mgxs runs/case1/mgxs_library.h5 \
   --tally-name openmc_ce_volume_flux \
   --dataset-name openmc_volume_flux \
+  --source-domain-ids "${CE_DOMAIN_IDS}" \
   -o runs/case1/openmc_ce_flux.h5 \
   --summary-json runs/case1/openmc_ce_flux_summary.json
 
@@ -283,6 +313,7 @@ openmc2donjon export-volume-flux mg_statepoint.h5 \
   --mgxs runs/case1/mgxs_library.h5 \
   --tally-name openmc_mg_volume_flux \
   --dataset-name openmc_mg_flux \
+  --source-domain-ids "${MG_DOMAIN_IDS}" \
   -o runs/case1/openmc_mg_flux.h5 \
   --summary-json runs/case1/openmc_mg_flux_summary.json
 ```
@@ -292,7 +323,10 @@ The exporter writes datasets in `(mixture, group)` order and tags them with
 EnergyFilter tally bins are reversed to the high-to-low group order used by
 the MGXS handoff and DONJON.
 
-Then build and inject the OpenMC-side SPH factors:
+Then build the OpenMC-side SPH factors. Set
+`CE_FLUX_REL_SIGMA_LIMIT` and `MG_FLUX_REL_SIGMA_LIMIT` from the project's
+predeclared statistical uncertainty budget; neither is a universal product
+constant:
 
 ```sh
 openmc2donjon make-openmc-sph-sidecar runs/case1/mgxs_library.h5 \
@@ -301,20 +335,46 @@ openmc2donjon make-openmc-sph-sidecar runs/case1/mgxs_library.h5 \
   --mg-flux runs/case1/openmc_mg_flux.h5::openmc_mg_flux \
   --table-output runs/case1/openmc_sph.csv \
   --damping 0.5 \
+  --sph-target rate \
+  --flux-normalization power \
   --require-reference-flux-std-dev \
-  --max-reference-flux-std-dev-rel 0.05 \
+  --max-reference-flux-std-dev-rel "${CE_FLUX_REL_SIGMA_LIMIT}" \
   --require-mg-flux-std-dev \
-  --max-mg-flux-std-dev-rel 0.05 \
+  --max-mg-flux-std-dev-rel "${MG_FLUX_REL_SIGMA_LIMIT}" \
   --summary-json runs/case1/openmc_sph_summary.json
+```
 
-openmc2donjon augment-sph runs/case1/mgxs_library.h5 \
+For each next OpenMC MG iteration, apply `XS / NSPH` to the OpenMC-native
+`setN` library, rerun the homogenized MG model, and recompute the sidecar with
+`--previous-sph` until the declared update residual passes:
+
+```sh
+openmc2donjon apply-sph runs/case1/mg_case/mgxs_unapplied.h5 \
+  --input-format openmc-mgxs \
   --sph-source runs/case1/openmc_sph_sidecar.h5 \
-  -o runs/case1/mgxs_with_openmc_sph.h5 \
-  --summary-json runs/case1/sph_augment_summary.json
+  -o runs/case1/mg_case/mgxs.h5
+```
 
-openmc2donjon runs/case1/mgxs_with_openmc_sph.h5 \
-  -o runs/case1/out.mcompo.txt \
-  --check --require-sph
+The OpenMC-native `setN` file is a different serialization from the
+Converter-layout sidecar input, so this intermediate application is explicitly
+marked `openmc-mgxs-intermediate-unbound`. It is valid only for the next MG
+iteration and cannot satisfy the strict Converter physical-SPH gate. The final
+application must target the exact Converter-layout HDF5 bound by the sidecar
+SHA-256.
+
+Once converged, apply the final factors to the Converter-facing HDF5. This
+rewrites the macroscopic cross sections; `augment-sph` only attaches factor
+records and is not a substitute for this production step:
+
+```sh
+openmc2donjon apply-sph runs/case1/mgxs_library.h5 \
+  --sph-source runs/case1/openmc_sph_sidecar.h5 \
+  -o runs/case1/mgxs_sph_applied.h5 \
+  --summary-json runs/case1/sph_apply_summary.json
+
+openmc2donjon runs/case1/mgxs_sph_applied.h5 \
+  -o runs/case1/out.mcompo.txt --production --require-physical-sph \
+  --summary-json runs/case1/out.mcompo.txt.convert.json
 ```
 
 For a portable fixture-backed check of this route:
@@ -367,6 +427,7 @@ def build_library():
     library.domains = list(geometry.get_all_cells().values())
     library.by_nuclide = False
     library.legendre_order = 1
+    library.correction = None
     library.build_library()
     return library
 
@@ -391,15 +452,48 @@ def root_attrs():
     return {"domain_mode": "cell"}
 ```
 
-Use ordinary OpenMC `"scatter matrix"` for the DONJON scattering payload. The
-exporter does not silently fall back to `"nu-scatter matrix"` or
-`"consistent nu-scatter matrix"`. If a nonstandard scattering MGXS is
-intentional, select it explicitly with `--scatter-mgxs-type` or a recipe hook:
+The general static policy uses `"absorption"` paired with ordinary
+`"scatter matrix"` (or the ordinary `"consistent scatter matrix"` estimator).
+Set `library.correction = None` before `library.build_library()` for either
+policy. OpenMC otherwise defaults to a diagonal transport correction when the
+Legendre order is zero. Converter writes raw total XS, so it rejects active
+P0-corrected scattering rather than mixing corrected and uncorrected terms.
+This setting does not disable a separately tallied `transport` or `nu-transport`
+used for the diffusion coefficient.
+
+For a fast-spectrum static calculation in which
+multiplicative `(n,xn)` scattering must contribute to neutron balance, include
+the complete matched set below in `library.mgxs_types`:
+
+```python
+"absorption",
+"reduced absorption",
+"consistent nu-scatter matrix",
+"nu-transport",
+```
+
+and select the nu-weighted matrix explicitly with a recipe hook:
 
 ```python
 def scatter_mgxs_type():
     return "consistent nu-scatter matrix"
 ```
+
+The ordinary and nu-weighted policies are distinct. The exporter does not infer
+one from the energy range, silently substitute one matrix for another, or
+construct reduced absorption from independent reaction-rate arithmetic. For
+the fast-spectrum policy, OpenMC supplies `reduced absorption`, the
+`consistent nu-scatter matrix`, and the matching `nu-transport`; the exporter
+checks and preserves that complete set. Ordinary scattering instead pairs with
+ordinary `transport`.
+Do not manually edit the absorption vector or scattering matrix.
+
+Converter writes `NTOT0` and the selected `SCAT` records. DONJON therefore sees
+the static net absorption implicitly as total minus the P0 scattering row sum.
+The reduced-absorption/consistent-nu-scatter pair retains neutron multiplication
+from `(n,xn)` in this balance. It does not create separate `N2N` or `N3N`
+depletion-reaction records; generating those records is outside this static
+macroscopic handoff.
 
 For mesh or other subdomain exports, return explicit `DomainExportSpec` objects:
 
@@ -452,8 +546,10 @@ are `library`, `recipe_path`, `statepoint_path`, `output_path`, and `summary`.
 
 ## OpenMC Reference Flux for SPH Loops
 
-The fixed-OpenMC SPH workflow needs an OpenMC volume-flux matrix with shape
-`(mixture, group)` and the same mixture order/group order as the MGXS handoff.
+The standard fixed-reference OpenMC CE/MG workflow needs a CE volume-flux
+matrix projected conservatively from the heterogeneous fine geometry onto the
+declared comparison domains. Its shape is `(mixture, group)`, and its
+comparison-domain/group order matches the homogenized MG flux and MGXS handoff.
 A recipe can add that matrix in `postprocess_hdf5`:
 
 ```python
@@ -486,7 +582,9 @@ openmc2donjon make-openmc-sph-sidecar mgxs_library.h5 \
   -o sph_sidecar.h5 \
   --reference-flux openmc_ce_flux.h5::openmc_volume_flux \
   --mg-flux openmc_mg_flux.h5::openmc_volume_flux \
-  --table-output sph_openmc_ce_mg.csv
+  --table-output sph_openmc_ce_mg.csv \
+  --sph-target rate \
+  --flux-normalization power
 ```
 
 These are two different uncertainty paths. MGXS `*_std_dev` datasets audit the
@@ -494,13 +592,17 @@ cross sections exported to DONJON; `openmc_volume_flux_std_dev` audits the
 OpenMC CE reference flux used to compute SPH factors.
 
 The command above writes both the auditable CSV table and the HDF5 sidecar.
-After the sidecar is reviewed, inject it:
+After convergence and review, apply it to the Converter-facing HDF5:
 
 ```sh
-openmc2donjon augment-sph mgxs_library.h5 \
+openmc2donjon apply-sph mgxs_library.h5 \
   --sph-source sph_sidecar.h5 \
-  -o mgxs_with_sph.h5
+  -o mgxs_sph_applied.h5
 ```
+
+`augment-sph` remains available when a downstream `L_MACROLIB` workflow
+explicitly consumes `GROUP/*/NSPH`; it attaches records without rewriting cross
+sections and does not satisfy the standard applied-SPH production contract.
 
 When `external_reference_flux.h5` also contains
 `/openmc_volume_flux_std_dev`, the scaffold copies and audits it the same way.

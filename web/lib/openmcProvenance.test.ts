@@ -107,7 +107,7 @@ describe("OpenMC provenance presentation", () => {
     const view = openmcProvenanceView(referenceOnly);
     expect(view.label).toBe("REFERENCE BOUND");
     expect(view.tone).toBe("warn");
-    expect(view.summary).toContain("Native DRAGON SPH");
+    expect(view.summary).toContain("declared equivalence workflow");
   });
 
   it("fails closed when embedded integrity is invalid", () => {

@@ -39,6 +39,11 @@ _MIXTURE_XS_DATASET_ALIASES: dict[str, tuple[str, ...]] = {
     "total": ("total",),
     "transport_total": ("transport_total",),
     "absorption": ("absorption",),
+    # OpenMC's reduced absorption is the matching removal term when the
+    # selected scattering matrix includes neutron multiplicity from (n,xn).
+    # Keep it separate from ordinary absorption: it can legitimately be
+    # negative in fast groups and must never be substituted silently.
+    "reduced_absorption": ("reduced_absorption", "reduced absorption"),
     "fission": ("fission",),
     "nu_fission": ("nu_fission",),
     "chi": ("chi",),
@@ -105,9 +110,18 @@ def register_inspect_routes(
         # a bare "0 mixtures, FAIL".
         payload.update(_read_top_level_peek(real_path))
         payload["openmc_provenance"] = read_openmc_provenance(real_path)
-        payload["production_audit"] = input_report_payload(
-            validate_production_input(real_path)
-        )
+        production_audit = input_report_payload(validate_production_input(real_path))
+        payload["production_audit"] = production_audit
+        for key in (
+            "openmc_scatter_mgxs_type",
+            "openmc_scatter_multiplicity_weighted",
+            "openmc_scatter_balance_dataset",
+            "openmc_scatter_contract_declared",
+            "openmc_scatter_contract_valid",
+            "openmc_transport_mgxs_type",
+            "openmc_transport_contract_declared",
+        ):
+            payload[key] = production_audit.get(key)
         return payload
 
     @app.get("/api/inspect/mixture")

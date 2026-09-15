@@ -72,6 +72,13 @@ def test_withdrawn_colorset_runner_and_summary_cannot_emit_acceptance() -> None:
         ROOT
         / "examples/irena30_sph_stage2_csd/summarize_physical_closure.py"
     ).read_text(encoding="utf-8")
+    model = (
+        ROOT
+        / "examples/irena30_sph_stage2_csd/irena_csd_colorset_model.py"
+    ).read_text(encoding="utf-8")
+    recipe = (
+        ROOT / "examples/irena30_sph_stage2_csd/export_recipe.py"
+    ).read_text(encoding="utf-8")
 
     assert "OPENMC2DONJON_ALLOW_WITHDRAWN_COLORSET_DIAGNOSTIC" in runner
     assert '!= "1"' in runner
@@ -82,6 +89,9 @@ def test_withdrawn_colorset_runner_and_summary_cannot_emit_acceptance() -> None:
     assert '"physics_accepted": False' in summary
     assert '"production_ready": False' in summary
     assert '"decision": "accepted"' not in summary
+    assert '"reduced absorption"' in model
+    assert '"nu-transport"' in model
+    assert 'return "consistent nu-scatter matrix"' in recipe
 
 
 def test_product_docs_name_the_current_irena_domain_route() -> None:

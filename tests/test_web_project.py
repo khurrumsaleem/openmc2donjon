@@ -1419,13 +1419,21 @@ def _production_preflight_input(
 
 def _write_applied_handoff(path: Path, *, domains: int = 7) -> None:
     names = [f"domain_{index}" for index in range(1, domains + 1)]
+    source_input = path.with_name("source_input.h5")
+    reference_flux = path.with_name("openmc_ce_flux.h5")
+    mg_flux = path.with_name("openmc_mg_flux.h5")
+    sidecar = path.with_name("openmc_sph.h5")
     with h5py.File(path, "w") as h5:
+        h5.attrs["energy_groups"] = 1
+        h5.create_dataset("energy_bounds", data=np.asarray([0.0, 1.0]))
         h5.create_dataset("mixture_names", data=np.asarray(names, dtype="S"))
         mixtures = h5.create_group("mixtures")
         for index, name in enumerate(names, start=1):
-            mixtures.create_group(name).attrs["source_domain_index"] = index
+            mixture = mixtures.create_group(name)
+            mixture.attrs["source_domain_index"] = index
+            mixture.create_dataset("applied_sph", data=np.ones(1))
         h5.attrs["sph_applied"] = True
-        h5.attrs["sph_applied_source"] = "openmc_sph.h5"
+        h5.attrs["sph_applied_source"] = str(sidecar)
         h5.attrs["sph_apply_operator"] = "divide-xs-by-nsph"
         h5.attrs["sph_kind"] = "openmc-ce-mg-rate"
         h5.attrs["sph_real"] = True
@@ -1438,6 +1446,39 @@ def _write_applied_handoff(path: Path, *, domains: int = 7) -> None:
         h5.attrs["sph_frozen_group_bin_count"] = 0
         h5.attrs["sph_clipped_count"] = 0
         h5.attrs["sph_max_update_residual"] = 0.01
+        h5.attrs["sph_source_binding_schema"] = (
+            "openmc2donjon.openmc-sph-source-bindings.v1"
+        )
+        h5.attrs["sph_apply_binding_schema"] = (
+            "openmc2donjon.sph-apply-bindings.v1"
+        )
+        h5.attrs["sph_apply_binding_mode"] = "converter-final-exact-input"
+        h5.attrs["sph_apply_sidecar_input_hash_verified"] = True
+        h5.attrs["sph_input_h5_path"] = str(source_input)
+        h5.attrs["sph_input_h5_sha256"] = "a" * 64
+        h5.attrs["sph_apply_input_h5_path"] = str(source_input)
+        h5.attrs["sph_apply_input_h5_sha256"] = "a" * 64
+        h5.attrs["sph_reference_flux_path"] = str(reference_flux)
+        h5.attrs["sph_reference_flux_sha256"] = "b" * 64
+        h5.attrs["sph_reference_flux_dataset"] = "openmc_volume_flux"
+        h5.attrs["sph_reference_flux_layout_verified"] = True
+        h5.attrs["sph_mg_flux_path"] = str(mg_flux)
+        h5.attrs["sph_mg_flux_sha256"] = "c" * 64
+        h5.attrs["sph_mg_flux_dataset"] = "openmc_mg_flux"
+        h5.attrs["sph_mg_flux_layout_verified"] = True
+        h5.attrs["sph_apply_sidecar_path"] = str(sidecar)
+        h5.attrs["sph_apply_sidecar_sha256"] = "d" * 64
+        h5.attrs["sph_previous_sph_used"] = False
+        for prefix, dataset in (
+            ("sph_reference_flux", "openmc_volume_flux_std_dev"),
+            ("sph_mg_flux", "openmc_mg_flux_std_dev"),
+        ):
+            h5.attrs[f"{prefix}_uncertainty_require_coverage"] = True
+            h5.attrs[f"{prefix}_uncertainty_coverage"] = True
+            h5.attrs[f"{prefix}_uncertainty_limit"] = 0.05
+            h5.attrs[f"{prefix}_uncertainty_observed_max_rel"] = 0.01
+            h5.attrs[f"{prefix}_uncertainty_pass"] = True
+            h5.attrs[f"{prefix}_std_dev_dataset"] = dataset
 
 
 def _write_native_summary(

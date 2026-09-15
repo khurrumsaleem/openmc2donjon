@@ -32,6 +32,8 @@ def test_strict_orbit_ce_sources_compile_and_declare_physics_contract() -> None:
     assert 'ENERGY_MESH_ID = "anl_24c_20mev"' in model_text
     assert "HANDOFF_LEGENDRE_ORDER = 1" in model_text
     assert '"consistent nu-scatter matrix"' in model_text
+    assert '"reduced absorption"' in model_text
+    assert '"nu-transport"' in model_text
     assert "N_HEXES = 91" in model_text
     assert "N_ORBITS = 21" in model_text
     assert 'boundary = "vacuum" if edge_counts[key] == 1' in model_text
@@ -133,6 +135,7 @@ def test_optional_openmc_structure_and_xml_generation(
     assert library.energy_groups.num_groups == 24
     assert library.legendre_order == 1
     assert "consistent nu-scatter matrix" in library.mgxs_types
+    assert "reduced absorption" in library.mgxs_types
     assert library.correction is None
 
     import h5py

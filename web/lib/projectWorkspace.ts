@@ -463,13 +463,10 @@ export function projectComponentPrepareHref(
   projectRoot: string,
   component: ProjectComponentStatus,
 ): string {
-  // OpenMC is only an optional way to create a missing Converter input. Keep
-  // this route on the direct, two-step MGXS export path: selecting a physical
-  // SPH contract must not silently opt the user into OpenMC MG-side SPH.
   const withdrawnColorset = isIrenaColorsetSphContract(component.contract);
   const params = new URLSearchParams({
     workflow: "two-step",
-    equivalence: "direct",
+    equivalence: component.contract === "physical-sph" ? "sph" : "direct",
     format: component.format,
     production: withdrawnColorset ? "0" : "1",
     component: component.id,
@@ -483,6 +480,27 @@ export function projectComponentPrepareHref(
   }
   if (projectRoot) params.set("project", normalizeProjectRoot(projectRoot));
   return `/openmc?${params.toString()}`;
+}
+
+export function projectComponentStartHref(
+  projectRoot: string,
+  component: ProjectComponentStatus,
+): string {
+  if (component.contract !== "physical-sph") {
+    return projectComponentConvertHref(projectRoot, component);
+  }
+  if (component.handoff.state === "accepted") {
+    return projectComponentConvertHref(projectRoot, component);
+  }
+  if (
+    component.handoff.state === "rejected" &&
+    component.handoff.issues.some((issue) =>
+      /(?:apply-sph|sph[_ -]?applied|applied[^ ]*sph|rate[- ]sph|physical[- ]sph)/i.test(issue),
+    )
+  ) {
+    return projectComponentEquivalenceHref(projectRoot, component);
+  }
+  return projectComponentPrepareHref(projectRoot, component);
 }
 
 export function projectComponentConverterOutputPath(
@@ -633,8 +651,10 @@ export function projectNativeSphEntryHrefs(
 
 export function projectEquivalenceActionLabel(
   contract: ProjectComponentStatus["contract"],
-): "Native SPH" | "Physical SPH" {
-  return isNativeSphContract(contract) ? "Native SPH" : "Physical SPH";
+): "Advanced native SPH" | "Recommended CE/MG SPH" {
+  return isNativeSphContract(contract)
+    ? "Advanced native SPH"
+    : "Recommended CE/MG SPH";
 }
 
 export function projectConsumerActionLabel(

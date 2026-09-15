@@ -32,6 +32,12 @@ class EnergyCollapseTests(unittest.TestCase):
                     float(np.dot(fine_abs, fine_flux)),
                     float(np.dot(coarse_abs, coarse_flux)),
                 )
+                fine_reduced_abs = original["mixtures/fuel/reduced_absorption"][:]
+                coarse_reduced_abs = collapsed["mixtures/fuel/reduced_absorption"][:]
+                self.assertAlmostEqual(
+                    float(np.dot(fine_reduced_abs, fine_flux)),
+                    float(np.dot(coarse_reduced_abs, coarse_flux)),
+                )
 
                 fine_scat = original["mixtures/fuel/scatter_matrix"][0]
                 coarse_scat = collapsed["mixtures/fuel/scatter_matrix"][0]
@@ -84,6 +90,7 @@ def _write_fixture(path: Path) -> None:
         fuel.create_dataset("total", data=[0.5, 0.6, 0.7])
         fuel.create_dataset("transport_total", data=[0.4, 0.5, 0.6])
         fuel.create_dataset("absorption", data=[0.1, 0.2, 0.4])
+        fuel.create_dataset("reduced_absorption", data=[-0.02, 0.15, 0.35])
         fuel.create_dataset("fission", data=[0.02, 0.03, 0.04])
         fuel.create_dataset("nu_fission", data=[0.05, 0.07, 0.09])
         fuel.create_dataset("kappa_fission", data=[1.0, 2.0, 3.0])

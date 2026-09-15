@@ -20,9 +20,9 @@ export default function ConverterQuickStart() {
         Start with a Converter-ready MGXS handoff
       </h2>
       <p className="mt-2 text-[12px] leading-5 text-[var(--fg-2)]">
-        This is the common path when the OpenMC export step is already done.
-        Enter its openmc2donjon handoff path now or browse on the next page;
-        Converter validates the schema before it writes anything.
+        Use this path only when the HDF5 is ready, including any required upstream
+        SPH correction. Enter its path now or browse on the next page; Converter
+        validates the schema before it writes anything.
       </p>
 
       <label className="mt-5 block">

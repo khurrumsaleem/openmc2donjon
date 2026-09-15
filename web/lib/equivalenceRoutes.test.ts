@@ -11,15 +11,11 @@ import {
 } from "./equivalenceRoutes";
 
 describe("equivalence routes", () => {
-  it("routes the default native DRAGON SPH reference through native-sph Converter", () => {
+  it("defaults to the recommended OpenMC CE/MG physical-SPH contract", () => {
     const contract = resolveEquivalenceContract(null, false);
-    const href = equivalenceConverterReferenceHref({ contract });
 
-    expect(contract).toBe(NATIVE_SPH_CONTRACT);
-    expect(href).toBe(
-      "/convert?contract=native-sph&format=macrolib&check=1&production=1",
-    );
-    expect(href).not.toContain("physical-sph");
+    expect(contract).toBe(OPENMC_SIDE_SPH_CONTRACT);
+    expect(resolveEquivalenceRoute(null, false)).toBe("openmc-side");
   });
 
   it("preserves an explicitly selected OpenMC MG-side physical-SPH contract", () => {
@@ -40,14 +36,23 @@ describe("equivalence routes", () => {
     );
   });
 
-  it("separates the native and optional OpenMC-side routes at the top level", () => {
-    expect(resolveEquivalenceRoute(null, false)).toBe("native");
+  it("keeps native DRAGON SPH available only when explicitly selected", () => {
+    expect(resolveEquivalenceRoute("native", false)).toBe("native");
+    expect(resolveEquivalenceRoute(null, false, NATIVE_SPH_CONTRACT)).toBe(
+      "native",
+    );
     expect(resolveEquivalenceRoute(null, true)).toBe("openmc-side");
     expect(resolveEquivalenceRoute(null, false, "physical-sph")).toBe(
       "openmc-side",
     );
     expect(resolveEquivalenceContract("native-sph", false, "openmc-side")).toBe(
       OPENMC_SIDE_SPH_CONTRACT,
+    );
+    expect(resolveEquivalenceContract(null, false, "native")).toBe(
+      NATIVE_SPH_CONTRACT,
+    );
+    expect(resolveEquivalenceContract("physical-sph", false, "native")).toBe(
+      NATIVE_SPH_CONTRACT,
     );
   });
 

@@ -182,6 +182,7 @@ function equivalenceRequiredInputs(value: string): string[] {
       "Input MGXS HDF5 path",
       "OpenMC CE reference flux",
       "OpenMC MG macro flux",
+      "Explicit CE and MG max relative std-dev project thresholds",
       "SPH sidecar output path",
     ];
   }

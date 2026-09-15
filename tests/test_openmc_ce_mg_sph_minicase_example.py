@@ -28,6 +28,7 @@ class OpenMCCeMgSphMinicaseExampleTests(unittest.TestCase):
 
         self.assertIn('ENERGY_MESH_ID = "ecco_33"', text)
         self.assertIn("LEGENDRE_ORDER = 3", text)
+        self.assertIn('"nu-transport"', text)
         self.assertIn('MG_MACRO_SCATTER_FORMAT = "histogram"', text)
         self.assertIn("MG_MACRO_HISTOGRAM_BINS = 16", text)
         self.assertIn("OPENMC2DONJON_COLORSET_VARIANT", text)
@@ -39,7 +40,7 @@ class OpenMCCeMgSphMinicaseExampleTests(unittest.TestCase):
         self.assertIn("reverse_openmc_energy_filter_flux", text)
         self.assertIn("write_openmc_volume_flux_hdf5", text)
         self.assertIn('"sph_route"', text)
-        self.assertIn("OpenMC CE reference + OpenMC MG same geometry", text)
+        self.assertIn("diagnostic OpenMC CE/MG same-partition", text)
         self.assertIn('"colorset_variant"', text)
         self.assertIn('"output_region_count"', text)
 
@@ -147,7 +148,7 @@ class OpenMCCeMgSphMinicaseExampleTests(unittest.TestCase):
         self.assertIn("out_with_openmc_sph.macrolib.txt", wrapper)
 
         self.assertIn("DONJON consume smoke", evidence)
-        self.assertIn("Two-Region SPH Production Probe", evidence)
+        self.assertIn("Two-Region High-Statistics Diagnostic", evidence)
         self.assertIn("target_mix=1 expected_g1=1.11109312", evidence)
         self.assertIn("target_mix=2 expected_g1=1.08736236", evidence)
         self.assertIn("pn_ntot0_ratio=1.08736241", evidence)
@@ -194,19 +195,24 @@ class OpenMCCeMgSphMinicaseExampleTests(unittest.TestCase):
         self.assertIn("cell_mixture_map", script)
         self.assertIn("flux_shape_mean_relative_residual", script)
 
-    def test_production_evidence_fixture_records_openmc_sph_handoff_quality(self) -> None:
+    def test_recorded_fixture_is_explicitly_diagnostic_handoff_evidence(self) -> None:
         evidence = (_example_dir() / "PRODUCTION_EVIDENCE.md").read_text(encoding="utf-8")
         fixture = _repo_root() / "src/openmc2donjon/web/fixtures/openmc_sph_physics_summary.json"
         payload = json.loads(fixture.read_text(encoding="utf-8"))
 
         self.assertIn("openmc_ce_mg_sph_production_quality", evidence)
+        self.assertIn("retained for compatibility", evidence)
+        self.assertIn("does not report fine-to-coarse", evidence)
         self.assertIn("not a DONJON feedback loop", evidence)
         self.assertIn("MACROLIB handoff", evidence)
         self.assertEqual(
             payload["schema"],
             "openmc2donjon.openmc-ce-mg-sph-physics-summary.v1",
         )
-        self.assertEqual(payload["route"], "OpenMC CE reference + OpenMC MG same geometry -> OpenMC-side SPH")
+        self.assertEqual(
+            payload["route"],
+            "Diagnostic OpenMC CE/MG same-partition flux comparison",
+        )
         self.assertEqual(payload["energy_groups"], 33)
         self.assertEqual(
             payload["mixture_names"],
@@ -230,7 +236,7 @@ class OpenMCCeMgSphMinicaseExampleTests(unittest.TestCase):
         self.assertAlmostEqual(payload["sph"]["minimum"], 0.872017860823)
         self.assertAlmostEqual(payload["sph"]["maximum"], 1.11109311723)
         # SPH update policy fields copied from the final sidecar summary of
-        # the two-region production run (--sph-target flux default, reject
+        # the two-region diagnostic run (explicit --sph-target flux, reject
         # zero-flux bins, no flux floor, no frozen groups).
         self.assertEqual(payload["sph_target"], "flux")
         self.assertEqual(payload["zero_flux_policy"], "reject")
@@ -324,10 +330,11 @@ class OpenMCCeMgSphMinicaseExampleTests(unittest.TestCase):
             ):
                 self.assertNotIn(name, payload)
             self.assertIn("OpenMC CE/MG SPH Physics Summary", markdown)
-            self.assertIn("## Quality", markdown)
+            self.assertIn("## Diagnostic Handoff Quality", markdown)
             self.assertIn("## SPH Iterations", markdown)
             self.assertIn("## Reaction-Rate Preservation", markdown)
-            self.assertIn("Accepted SPH consumption format", markdown)
+            self.assertIn("Checked diagnostic consumption format", markdown)
+            self.assertIn("Physical-SPH acceptance: `false`", markdown)
             self.assertIn("CS_FUEL", markdown)
 
     def test_summary_copies_sph_update_policy_fields_from_sidecar(self) -> None:

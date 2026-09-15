@@ -6,6 +6,10 @@ import EvidenceLadder from "@/components/EvidenceLadder";
 import { ApiError, OpenmcSphPhysicsSummary, api } from "@/lib/api";
 import { openmcSphEvidenceLadder } from "@/lib/evidenceLadder";
 import {
+  OPENMC_SPH_APPLY_FORM_HREF,
+  OPENMC_SPH_SIDECAR_FORM_HREF,
+} from "@/lib/openmcWorkflowWalkthrough";
+import {
   evidenceAuditPresentation,
   formatScatterTreatment,
   formatPhysicsNumber,
@@ -92,10 +96,10 @@ export default function OpenmcSphPhysicsSummaryCard({
             Review physical equivalence and downstream evidence
           </h3>
           <p className="mt-1 max-w-3xl text-[12px] leading-5 text-[var(--fg-2)]">
-            Load a `physics_summary.json` written by the preferred native
-            DRAGON SPH validator or by the optional OpenMC CE/MG cross-check.
-            The report identifies its route and never substitutes an empirical
-            eigenvalue multiplier for physical closure.
+            Load a `physics_summary.json` from the recommended OpenMC CE/MG
+            rate-preserving route or from an explicitly selected advanced native
+            DRAGON SPH route. The report identifies its route and never substitutes
+            an empirical eigenvalue multiplier for physical closure.
           </p>
         </div>
       </div>
@@ -237,11 +241,19 @@ function SummaryBody({ state }: { state: SummaryState }) {
                 Rebuild validation command
               </Link>
             </div>
+          ) : !native && summary.sph_target !== "rate" ? (
+            <Link href={OPENMC_SPH_SIDECAR_FORM_HREF} className="btn btn-primary text-[12px]">
+              Return to rate-preserving SPH
+            </Link>
+          ) : !native && summary.sph.applied_to_xs !== true ? (
+            <Link href={OPENMC_SPH_APPLY_FORM_HREF} className="btn btn-primary text-[12px]">
+              Apply SPH before Converter
+            </Link>
           ) : canOpenConverter && convertHref ? (
             <Link href={convertHref} className="btn btn-primary text-[12px]">
               {fixtureBacked
                 ? "Preview fixture in Converter"
-                : "Send SPH-augmented MGXS to Converter"}
+                : "Send corrected HDF5 to Converter"}
             </Link>
           ) : (
             <span className="rounded border border-amber-300/25 px-2 py-1 text-[11px] text-amber-200">
@@ -252,7 +264,7 @@ function SummaryBody({ state }: { state: SummaryState }) {
       </div>
 
       <EvidenceLadder
-        title={native ? "Native DRAGON SPH evidence scope" : "OpenMC MG-side SPH evidence scope"}
+        title={native ? "Advanced native DRAGON SPH evidence scope" : "Recommended OpenMC CE/MG SPH evidence scope"}
         stages={openmcSphEvidenceLadder(summary)}
         compact
       />
@@ -281,8 +293,8 @@ function SummaryBody({ state }: { state: SummaryState }) {
             </div>
             <p className="mt-1 max-w-3xl text-[12px] leading-5 text-[var(--fg-2)]">
               {native
-                ? "These fields document the actual fine-to-coarse closure: OpenMC uncertainty, native DRAGON SPH convergence, conserved rates, and the final DONJON comparison. PASS is issued only by the declared statistical and physical gates."
-                : "These fields document the optional OpenMC CE/MG-side SPH handoff: flux uncertainty, factor size, frozen-flux diagnostics, and exported NSPH. They do not create a physics-equivalence PASS by themselves."}
+                ? "These fields document the explicitly declared advanced native route: OpenMC uncertainty, native DRAGON SPH convergence, conserved rates, and the final DONJON comparison. PASS is issued only by the declared statistical and physical gates."
+                : "These fields document the recommended OpenMC CE/MG SPH route: flux uncertainty, factor size, frozen-flux diagnostics, rate preservation, and the corrected-handoff evidence. Downstream component or full-core acceptance remains a separate gate."}
             </p>
           </div>
           <span
@@ -320,7 +332,7 @@ function SummaryBody({ state }: { state: SummaryState }) {
             text={
               native
                 ? "OpenMC fine-model reference rates and uncertainty, Converter MACROLIB, native DRAGON SPH convergence, corrected MACROLIB, and the verification solve."
-                : "OpenMC CE reference flux, OpenMC MG macro flux on the same output regions, SPH(region, group), and the declared NSPH handoff."
+                : "Heterogeneous OpenMC CE fine-reference flux scored on the MG group boundaries, homogenized OpenMC MG coarse flux, the aligned state/BC/domain mapping, SPH(domain, group), and the declared corrected-HDF5 handoff."
             }
           />
           <EvidenceNote
@@ -434,11 +446,12 @@ function SummaryBody({ state }: { state: SummaryState }) {
           </>
         ) : (
           <>
-            SPH is carried as DONJON `NSPH` equivalence factors. The report says
+            In the recommended CE/MG route, the converged SPH factors are applied
+            before the corrected HDF5 enters Converter. The report says
             `applied_to_xs = {String(summary.sph.applied_to_xs)}`, so the macro
             cross sections {summary.sph.applied_to_xs
               ? "in this HDF5 were already divided by the SPH factors (apply-sph route)."
-              : "were not silently multiplied in the HDF5."}
+              : "were not yet corrected; this record must not be treated as the formal Converter input."}
           </>
         )}
       </div>

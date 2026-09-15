@@ -12,10 +12,13 @@ previous SPH table
   -> convert to L_MACROLIB
 ```
 
-It represents the new project direction where SPH factors are computed on
-the OpenMC side from a fixed high-fidelity CE reference and an OpenMC MG
-macro solve using the same geometry. The converter then carries those SPH
-factors into the HDF5 handoff and writes the DRAGON/DONJON ASCII library.
+It is a deterministic mechanics fixture: the input matrices are already
+mapped to a shared `(comparison domain, energy group)` order, and the script
+explicitly selects the diagnostic `flux` target and `none` normalization to
+keep its reference numbers stable. The standard physical workflow instead uses
+a detailed heterogeneous CE geometry, a homogenized MG coarse geometry, and a
+rate-preserving, power-normalized update before Converter writes the
+DRAGON/DONJON object.
 
 This is not a DONJON feedback loop. DONJON is not run by this example, and
 no DONJON flux is fed back into the SPH update.

@@ -34,9 +34,9 @@ export interface OpenmcSphPlannerPrefill {
 
 export const MOCK_OPENMC_SPH_DEMO: OpenmcSphDemoPreset = {
   id: "mock-openmc-sph",
-  label: "Mock OpenMC-side SPH minicase",
+  label: "Mock CE/MG SPH diagnostic",
   description:
-    "Prefill the OpenMC prep form with bundled mock paths for the CE/MG SPH route.",
+    "Prefill the CE/MG SPH inputs with bundled mock paths. Apply the converged factors before entering Converter.",
   runRoot: "/mock/home/openmc-runs/openmc-sph-minicase",
   recipe: "/mock/home/openmc-runs/openmc-sph-minicase/export_recipe.py",
   ceStatepoint: "/mock/home/openmc-runs/openmc-sph-minicase/ce_statepoint.h5",
@@ -49,9 +49,9 @@ export const MOCK_OPENMC_SPH_DEMO: OpenmcSphDemoPreset = {
 
 export const LIVE_OPENMC_SPH_DEMO: OpenmcSphDemoPreset = {
   id: "live-openmc-sph",
-  label: "Two-region OpenMC-side SPH production minicase",
+  label: "Two-region OpenMC-side SPH diagnostic",
   description:
-    "Run the minimal CE/MG colorset where two output regions produce two SPH factors per energy group, then prefill production-quality SPH-augmented artifacts.",
+    "Review the high-statistics same-partition flux-target example: two output regions produce two SPH factors per group and exercise HDF5-to-DONJON data carriage. This is not physical-SPH acceptance.",
   runRoot: "/private/tmp/openmc2donjon_two_region_production_20260709",
   recipe: "examples/openmc_ce_mg_33g_sph_minicase/export_recipe.py",
   ceStatepoint:
@@ -96,35 +96,4 @@ export function openmcSphEvidenceHref(preset: OpenmcSphDemoPreset): string {
     summary: preset.physicsSummary,
   });
   return `/openmc?${params.toString()}#openmc-sph-summary`;
-}
-
-export function openmcSphConvertHref(preset: OpenmcSphDemoPreset): string {
-  const params = new URLSearchParams({
-    intent: "openmc-sph",
-    input: preset.augmentedH5,
-    output: preset.ascii,
-    format: "macrolib",
-    writer_backend: "ascii",
-    check: "1",
-    production: "1",
-    require_known_mesh: "0",
-    comment: "OpenMC-side SPH-augmented handoff",
-  });
-  return `/convert?${params.toString()}`;
-}
-
-export function openmcSphBundleHref(preset: OpenmcSphDemoPreset): string {
-  const params = new URLSearchParams({
-    command: "bundle",
-    output_dir: `${parentDir(preset.ascii)}/bundle`,
-    mgxs: preset.augmentedH5,
-    macrolib: preset.ascii,
-  });
-  return `/builder?${params.toString()}`;
-}
-
-function parentDir(path: string): string {
-  const index = path.lastIndexOf("/");
-  if (index <= 0) return ".";
-  return path.slice(0, index);
 }

@@ -48,8 +48,8 @@ function multicompoAnatomy(input: ConvertPreflightInput | null): ConvertArtifact
         id: "xs",
         title: "Macroscopic XS",
         body:
-          "Each calculation stores one macro isotope record with total, transport, absorption/fission data, chi, and sparse Legendre scattering triplets.",
-        blocks: ["ISOTOPESLIST", "NTOT0", "STRD", "SCATxx"],
+          "Each calculation stores one macro isotope record with total, transport, sparse Legendre scattering, and fission data plus chi when fissionable. Absorption/removal is not a separate output vector; it is implied by NTOT0 minus the outgoing P0 scatter row.",
+        blocks: ["ISOTOPESLIST", "NTOT0", "STRD", "NUSIGF", "NFTOT", "CHI", "SCATxx"],
       },
       {
         id: "equivalence",

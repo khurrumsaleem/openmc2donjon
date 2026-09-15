@@ -15,6 +15,11 @@
 - Portable C5G7 converter demo is available.
 - Optional DONJON handoff smoke is available for machines with a local
   DRAGON/DONJON checkout.
+- Standard OpenMC CE-fine/OpenMC-MG-coarse rate-preserving SPH sidecar,
+  application, and iteration primitives are available. Their portable fixtures
+  prove software mechanics, not a full-core physics benchmark.
+- Advanced native DRAGON deck execution/validation is available for
+  project-specific external-solver workflows; it is not the standard operator.
 - Experimental one-parameter `BURN` multi-state serialization is available and
   has a tiny DONJON `NCR:` consumer smoke.
 - Hex support is validated by an accepted benchmark:
@@ -64,6 +69,19 @@
    - Natural extensions: the 3D fineZ rod-depth points (d00..d90) as a
      multi-state `ROD-DEPTH` multicompo, and a different-seed robustness
      run.
+
+6. Close one standard IRENA full-core SPH line without overclaiming it.
+   - Keep the heterogeneous CE geometry and homogenized MG geometry distinct.
+   - Prove matching CE tally/MG transport group boundaries, state and boundary
+     conditions, plus a
+     complete non-overlapping volume/rate-conservative comparison-domain map.
+   - Converge the OpenMC MG rate-preserving update without ADF, empirical/global
+     coefficients, clipping, floors, frozen groups, or fitted observables.
+   - Pass the corrected HDF5 through Converter and preserve its receipt before
+     DONJON verification.
+   - Keep every IRENA full-core SPH result unaccepted until the hash-linked
+     k-effective, leakage, 91-position power, statistics, and solver gates all
+     pass together.
 
 ## Later Work
 

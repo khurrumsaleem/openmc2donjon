@@ -90,6 +90,18 @@ class ConvertEndpointTests(unittest.TestCase):
                 self.assertEqual(policy["effective_thresholds"][name], maximum)
         preflight = payload["preflight"]["inputs"][0]
         self.assertEqual(
+            payload["scatter_contract"],
+            {
+                "openmc_scatter_mgxs_type": "scatter matrix",
+                "openmc_scatter_multiplicity_weighted": False,
+                "openmc_scatter_balance_dataset": "absorption",
+                "openmc_scatter_contract_declared": True,
+                "openmc_scatter_contract_valid": True,
+                "openmc_transport_mgxs_type": "transport",
+                "openmc_transport_contract_declared": True,
+            },
+        )
+        self.assertEqual(
             preflight["scatter_row_balance"]["fail_threshold"],
             PRODUCTION_CANONICAL_MAXIMUMS["scatter_row_balance_fail"],
         )

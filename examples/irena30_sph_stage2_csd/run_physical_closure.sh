@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ "${OPENMC2DONJON_ALLOW_WITHDRAWN_COLORSET_DIAGNOSTIC:-0}" != "1" ]]; then
   echo "This OpenMC-MG colorset closure is a withdrawn diagnostic, not an IRENA production or full-core acceptance route." >&2
-  echo "Use the 91-position/21-D3-orbit native-SPH workflow for the current IRENA candidate." >&2
+  echo "Use a clean 91-position/21-D3-orbit CE-fine -> MG-coarse rate-SPH workflow for the next IRENA candidate." >&2
   echo "Set OPENMC2DONJON_ALLOW_WITHDRAWN_COLORSET_DIAGNOSTIC=1 only to reproduce the archived diagnostic." >&2
   exit 2
 fi

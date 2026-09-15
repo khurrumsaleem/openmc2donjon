@@ -29,28 +29,38 @@ physics inputs, not for early format debugging.
 
 ## OpenMC-Side SPH Evidence
 
-Production SPH is expected to be generated upstream from an OpenMC CE
-reference and an OpenMC MG macro calculation using the same geometry. The
-converter accepts the resulting SPH/NSPH factors as explicit sidecar data and
-checks that the corrected HDF5 handoff is self-consistent before writing
+Production SPH is generated upstream from a heterogeneous OpenMC CE fine
+reference and a homogenized OpenMC MG coarse calculation. Their geometries are
+not the same. They must share the energy-group structure, physical state and
+boundary conditions, and a conservative comparison-domain map that preserves
+each coarse region's physical volume and integrated fine-reference flux/rates.
+The rate-preserving update is iterated to convergence, applied to the
+Converter-facing HDF5, and then checked by Converter before it writes
 DONJON-facing ASCII.
 
 For SPH handoffs, production review should record:
 
 - the OpenMC CE reference case and the OpenMC MG macro case, with its selected
   group structure, used to derive the factors;
+- the fine-to-coarse comparison-domain map and evidence that it is complete,
+  non-overlapping, and volume/rate conservative;
 - the homogenized output regions/media, because SPH is one factor per output
   region and energy group;
 - the angular treatment used in the MG macro calculation, such as Legendre
   `P1/P2/P3` or OpenMC histogram angular representation `Hn`;
-- whether the SPH factors were applied to cross sections upstream or carried as
-  explicit `NSPH` data in the handoff;
+- evidence that the converged SPH factors were applied to the standard
+  Converter-facing cross sections with `divide-xs-by-nsph`, including
+  `sph_applied=true` and the sidecar provenance;
 - the same MGXS preflight checks listed above.
+
+An advanced external native-DRAGON project records `NSPH` in its corrected
+MACROLIB and uses its separate deck/listing validator contract. Mere `NSPH`
+carriage or `augment-sph` is not the standard applied-SPH production route.
 
 A single isolated assembly often does not need SPH. Colorsets and full-core
 macro models may need it when the declared coarse-model equivalence cannot be
-accepted without a native SPH closure; region count alone never makes SPH
-mandatory.
+accepted without a converged rate-preserving closure; region count alone never
+makes SPH mandatory.
 
 Statistical uncertainty has two separate inputs:
 

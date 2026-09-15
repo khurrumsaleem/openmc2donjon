@@ -21,6 +21,19 @@ describe("convert showcase", () => {
     ).toContain("ordered mixture slots");
   });
 
+  it("describes absorption as an implicit output balance", () => {
+    const payload = convertShowcaseFacts({
+      format: "multicompo",
+      check: true,
+      production: true,
+      requireKnownMesh: false,
+      input: null,
+    }).find((fact) => fact.id === "payload");
+
+    expect(payload?.body).toContain("not stored as a separate output vector");
+    expect(payload?.body).toContain("total minus the outgoing P0 scatter row");
+  });
+
   it("surfaces production check mode and known-mesh strictness", () => {
     const gates = convertShowcaseFacts({
       format: "multicompo",

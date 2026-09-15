@@ -115,7 +115,7 @@ describe("convertDeliveryChecklist", () => {
     expect(items.find((item) => item.id === "hdf5")?.status).toBe("ready");
     expect(items.find((item) => item.id === "gates")?.status).toBe("skipped");
     expect(items.find((item) => item.id === "gates")?.body).toContain(
-      "Downstream SPH or project physics acceptance is a separate gate",
+      "Any required SPH is an upstream input gate",
     );
   });
 
@@ -126,7 +126,7 @@ describe("convertDeliveryChecklist", () => {
     );
 
     expect(items.find((item) => item.id === "donjon")?.body).toContain(
-      "does not claim downstream SPH or model-physics acceptance",
+      "does not claim downstream model or reactor acceptance",
     );
   });
 

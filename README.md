@@ -14,7 +14,8 @@ The product architecture is:
 
 - **Converter:** required formal handoff boundary.
 - **OpenMC MGXS:** optional input preparation when the HDF5 does not exist.
-- **Physical SPH:** optional CE/MG equivalence when the model requires it.
+- **Physical SPH:** optional rate-preserving OpenMC CE/MG equivalence when the
+  homogenized coarse model requires it.
 - **Project:** optional coordination for repeated or multi-component jobs.
 - **Inspect:** independent, read-only HDF5 structure and MGXS diagnostics.
 - **DONJON:** downstream use and independent validation.
@@ -67,7 +68,7 @@ Then open <http://localhost:3000>. Start on the page that matches the job:
 | [`/convert`](http://localhost:3000/convert) | You already have an MGXS HDF5 and want the required checked `L_MULTICOMPO` or `L_MACROLIB` handoff. |
 | [`/inspect`](http://localhost:3000/inspect) | You only want to browse and visualize an OpenMC MGXS HDF5 without converting it. |
 | [`/openmc`](http://localhost:3000/openmc) | You do not yet have a Converter-ready OpenMC MGXS HDF5 and need to prepare one first. |
-| [`/equivalence`](http://localhost:3000/equivalence) | The declared model requires physical SPH equivalence after the reference conversion. |
+| [`/equivalence`](http://localhost:3000/equivalence) | Before final conversion, the declared model needs the OpenMC MG SPH sidecar/application steps that produce a corrected HDF5. |
 | [`/projects`](http://localhost:3000/projects) | You need to coordinate repeated, multi-component, or full-core jobs. |
 | [`/pygan`](http://localhost:3000/pygan) | You want to check PyGan availability or compare the ASCII and PyGan writers. |
 | [`/donjon`](http://localhost:3000/donjon) | You are ready to consume or verify the converted object in DONJON. |
@@ -90,30 +91,43 @@ ASCII writer. See [Web Interface Details](#web-interface-details) and
 [`web/README.md`](web/README.md) for custom backend addresses and development
 notes.
 
-When physical SPH is selected, the primary route sends the fine OpenMC
-reference through Converter first, then solves native DRAGON `SPH:` on the
-project-declared coarse geometry and verifies the corrected object in DONJON.
-Native-SPH acceptance permits no ADF substitution, global multiplier,
-empirical calibration, or k-effective fitting. The model may declare one
-domain, many component domains, 91 independent positions, or exact symmetry
-orbits pooled during fine transport.
+When physical SPH is selected, the standard route holds a heterogeneous
+OpenMC CE calculation fixed as the fine reference and iterates a homogenized
+OpenMC MG calculation as the coarse equivalence solve. The two calculations
+do not use the same geometry: the CE model resolves the fine heterogeneity,
+while the MG model uses the declared homogenized regions. The CE reference
+tallies must use the MG transport group boundaries; both models must represent
+the same physical state and boundary conditions and declare a conservative
+comparison-domain map so that each coarse region corresponds to the same
+physical volume and preserves the integrated reference flux and reaction rates.
+Their native OpenMC domain IDs may differ and are mapped independently into
+the same canonical domain order.
 
 ```text
-OpenMC fine reference
-  -> Converter reference MACROLIB + receipt
-  -> native DRAGON SPH on the declared coarse geometry
-  -> corrected MACROLIB + DONJON verification
+heterogeneous OpenMC CE fine reference
+  -> conservative collapse onto declared comparison domains
+  -> homogenized OpenMC MG coarse solve
+  -> rate-preserving SPH update, XS / NSPH, and MG rerun to convergence
+  -> corrected MGXS HDF5 with sph_applied=true
+  -> Converter validation + L_MULTICOMPO or L_MACROLIB + receipt
+  -> project-defined DONJON verification
 ```
 
-The OpenMC CE/MG `make-openmc-sph-sidecar` + `apply-sph` workflow remains an
-optional alternate or cross-check when a project explicitly selects it. It is
-not the mandatory production operator and cannot replace the declared
-DRAGON/DONJON coarse solve for IRENA full-core acceptance.
+Every formal handoff still crosses Converter; SPH does not bypass its preflight,
+writer, or hash-linked receipt. Physical SPH permits no ADF substitution,
+global multiplier, empirical calibration, k-effective fitting, or numerical
+exemption such as identity substitution, floors, frozen groups, or clipping.
+
+An advanced project may instead declare an external native DRAGON `SPH:` solve.
+In that project-specific route, Converter first writes the uncorrected reference
+MACROLIB and receipt; the external DRAGON installation owns the SPH iteration,
+and `validate-native-sph` audits its deck, listing, corrected object, and
+verification evidence. This is not the standard built-in SPH operator.
 
 Generic Converter inputs may carry explicitly supplied ADF/DF records for
 separately declared workflows. Preserving those records is not permission to
-use ADF in a native-SPH acceptance route, and Converter never invents or fits
-an ADF or empirical correction.
+use ADF in a physical-SPH route, and Converter never invents or fits an ADF or
+empirical correction.
 
 ## Export And Convert Modes
 
@@ -126,9 +140,10 @@ Both invocation styles ship:
   a managed run directory in a single command.
 
 Either invocation style produces the same Converter-facing HDF5. A direct
-handoff can stop after Converter; a physical-equivalence project follows the
-declared native-DRAGON route above. OpenMC-side factors remain an optional
-alternate, not the primary product path.
+handoff can stop after Converter; a physical-equivalence project iterates the
+standard OpenMC CE/MG route above before sending the corrected HDF5 through
+Converter. An explicitly declared external native-DRAGON route remains an
+advanced project option.
 
 ## Output Formats
 
@@ -263,6 +278,38 @@ For the full walkthrough, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 Most real cases should use a small Python recipe that builds the case-specific
 OpenMC `mgxs.Library` and assigns stable spatial domain names.
 
+The recipe is a separate adapter and need not share a directory with the
+OpenMC `main.py`. Before the OpenMC transport run, generate the exact MGXS
+tallies declared by the recipe:
+
+```sh
+openmc2donjon-export --recipe export_recipe.py --write-tallies tallies.xml
+```
+
+No `main.py` change is needed if that driver uses the generated `tallies.xml`.
+If it constructs an in-memory `openmc.Model`, supplies its own tallies, or
+exports XML again, integrate the same recipe-library tallies or run in the order
+`export model XML -> generate tallies.xml -> run OpenMC`. A statepoint that did
+not score the recipe's MGXS cannot be repaired after the run.
+
+Set `library.correction = None` before `library.build_library()`, including for
+P0 scattering. OpenMC defaults to a P0 diagonal transport correction; that
+corrected matrix cannot be paired with the raw total cross section written by
+Converter. Active P0 correction is rejected during recipe checks and export.
+
+The ordinary static cross-section policy pairs OpenMC `absorption` with an
+ordinary `scatter matrix` or `consistent scatter matrix`. A fast-spectrum
+static policy that retains `(n,xn)` neutron multiplicity must additionally tally
+`reduced absorption`, explicitly select `consistent nu-scatter matrix`, and pair
+it with `nu-transport` instead of ordinary `transport`;
+users do not manually edit either vector or matrix. Converter checks the
+declared pair, then writes `NTOT0` and the selected `SCAT`/`SIGS` records. The
+downstream static removal is therefore implicit in `NTOT0` minus the outgoing
+P0 scatter row; no separate absorption block or `N2N`/`N3N` depletion record is
+emitted. See the
+[OpenMC export workflow](docs/OPENMC_EXPORT_WORKFLOW.md) and
+[fast-spectrum workflow](docs/FAST_SPECTRUM_WORKFLOW.md).
+
 Export only the converter-facing HDF5:
 
 ```sh
@@ -310,9 +357,9 @@ The converter preserves the OpenMC spatial partition:
 Recipe/statepoint exports also embed a content-hash-bound OpenMC provenance
 record. It binds both a declared-complete fine-model input manifest and the
 actual numerical HDF5 payload; the one-step v5 summary additionally binds the
-final HDF5 and ASCII bytes. This makes the fine reference auditable without
-making native DRAGON SPH rerun OpenMC or depend on the original local model
-paths.
+final HDF5 and ASCII bytes. This makes the fine reference and the final
+Converter handoff auditable without treating a path name or copied sidecar as
+physics evidence.
 
 This is intentionally not material-collapsed. Two domains with the same
 material may still receive different homogenized cross sections because their
@@ -347,18 +394,27 @@ Details:
 ## Physical SPH
 
 Physical SPH is optional. Use it only when the homogenized model needs an
-explicit equivalence closure. The primary physical route is OpenMC fine
-reference -> Converter reference MACROLIB -> native DRAGON SPH -> DONJON
-verification. A standalone assembly is a valid SPH model when its declared
-fine and coarse problems match; geometry alone neither accepts nor rejects it.
+explicit equivalence closure. The standard physical route is a fixed
+heterogeneous OpenMC CE fine reference -> homogenized OpenMC MG coarse solve ->
+rate-preserving SPH iteration -> corrected HDF5 -> Converter -> DONJON
+verification. A standalone assembly is a valid SPH comparison when the
+declared fine and coarse problems are physically matched; geometry size alone
+neither accepts nor rejects it.
 
 The general contract accepts any positive number of declared domains. It
 requires a matched fine reference and coarse model, rate preservation,
-convergence, zero numerical exemptions, and hash-linked artifacts. Converter
-checks the formal boundary and provenance; it never invents or fits a factor.
+convergence, zero numerical exemptions, and hash-linked artifacts. “Matched”
+does not mean geometrically identical: the CE geometry retains heterogeneity
+and the MG geometry is homogenized. The energy groups, state, boundary
+conditions, and conservative fine-to-coarse comparison-domain map must agree.
+The map must be complete and non-overlapping and preserve physical volume plus
+integrated reference flux and reaction rates. The final HDF5 must record
+`sph_applied=true`; Converter is the mandatory formal boundary and never
+invents or fits a factor.
 
-The commands below implement the optional OpenMC CE/MG alternate route. They
-do not replace native DRAGON SPH when the project declares that coarse solver.
+The commands below implement the standard OpenMC CE/MG route. Use
+`--sph-target rate` for the rate-preserving fixed point and repeat the MG
+solve/update until the declared convergence criterion passes.
 
 Entry points:
 
@@ -366,9 +422,11 @@ Entry points:
 openmc2donjon make-openmc-sph-sidecar mgxs_library.h5 \
   -o sph_sidecar.h5 \
   --reference-flux openmc_ce_flux.h5::openmc_volume_flux \
-  --mg-flux openmc_mg_flux.h5::openmc_mg_flux
+  --mg-flux openmc_mg_flux.h5::openmc_mg_flux \
+  --sph-target rate \
+  --flux-normalization power
 
-# Optional OpenMC-side SPH iteration:
+# OpenMC-side SPH iteration:
 # write corrected OpenMC-native MGXS (XS / NSPH), rerun OpenMC MG with it,
 # then recompute the SPH sidecar from the new MG flux.
 openmc2donjon apply-sph mg_case/mgxs_unapplied.h5 \
@@ -384,6 +442,12 @@ openmc2donjon mgxs_sph_applied.h5 --format multicompo \
   -o out.mcompo.txt --production --require-physical-sph
 ```
 
+For an explicitly declared advanced native-DRAGON project, first use Converter
+to write and receipt an uncorrected reference `L_MACROLIB`, then run the
+project-owned external `SPH:` deck and audit it with `validate-native-sph`.
+That route depends on an external DRAGON/DONJON installation and does not
+replace the standard OpenMC MG operator.
+
 Docs and examples:
 
 - [External face-flux contract](docs/EXTERNAL_FACE_FLUX_CONTRACT.md)
@@ -397,7 +461,7 @@ Current validation line:
 - The accepted IRENA-30 ZREFL 91-hex OpenMC-MG -> Converter -> DONJON
   SN8/SCAT2 baseline agrees with its paired OpenMC-MG reference in k-effective
   and fission-source shape. It validates downstream hex mapping and solver
-  mechanics; it is not CE-fine/native-SPH/full-core physics acceptance.
+  mechanics; it is not CE-fine/OpenMC-MG-SPH/full-core physics acceptance.
 - Converter round trips for `L_MULTICOMPO` and `L_MACROLIB`.
 - Mechanics smokes for recipe export, full-core domain mapping, hex geometry
   capability, and SPH handoff mechanics.
@@ -406,10 +470,12 @@ There is currently no accepted IRENA continuous-energy fine -> SPH ->
 full-core result. Earlier local PNL/EXT and INT/EXT summaries are withdrawn as
 physics passes: their listings contain unconverged final transport solves, and
 their local boundary/volume contract does not establish the full-core leakage
-environment. The current candidate uses all 91 fine assemblies with either 91
-independent domains or 21 exact global D3 orbit domains, then requires joint
-k-effective, leakage, power-shape, statistical, and numerical-convergence
-gates. No ADF or empirical/global eigenvalue factor is permitted.
+environment. A future candidate must keep all 91 fine assemblies (or a proved
+conservative symmetry mapping), build the corresponding homogenized OpenMC MG
+comparison domains, converge the rate-preserving SPH update, pass the corrected
+HDF5 through Converter, and then pass joint k-effective, leakage, power-shape,
+statistical, and numerical-convergence gates. No ADF or empirical/global
+eigenvalue factor is permitted.
 
 Run portable checks:
 
@@ -497,18 +563,19 @@ otherwise the server refuses to start unless `--unsafe-remote` is explicitly
 requested.
 
 The Web UI is intentionally localhost-first. Converter production validation,
-exact-deck native DRAGON SPH execution and evidence validation, optional
-OpenMC-side SPH sidecar/application, project creation/status, read-only HDF5
-inspection, PyGan writer comparison, and DONJON diagnostics can run locally;
-advanced builders retain copyable CLI commands for lower-level support
-operations.
+the standard OpenMC-side SPH sidecar/application operations, project
+creation/status, read-only HDF5 inspection, PyGan writer comparison, and DONJON
+diagnostics can run locally. Advanced projects can also run and validate an
+exact external native-DRAGON deck; that project-specific runner is not the
+standard SPH algorithm.
 
 ## Roadmap
 
 Near-term work:
 
-- produce one hash-linked IRENA 91-position/21-D3-orbit result through
-  Converter -> native DRAGON SPH -> DONJON and every full-core acceptance gate;
+- produce one hash-linked IRENA 91-position/21-D3-orbit result through the
+  standard OpenMC CE fine -> OpenMC MG coarse rate-SPH -> Converter -> DONJON
+  route and every full-core acceptance gate;
 - keep standard energy-mesh identification and uncertainty coverage visible in
   every production audit surface;
 - broader mypy coverage for small pure helper modules.

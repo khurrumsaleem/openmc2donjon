@@ -57,6 +57,10 @@ def _write_mgxs(path: Path) -> None:
         h5.attrs["domain_mode"] = "openmc_sph_update_table_example"
         h5.attrs["spatial_mapping"] = "one OpenMC MG macro region -> one DONJON mixture"
         h5.create_dataset("energy_bounds", data=ENERGY_BOUNDS)
+        h5.create_dataset(
+            "mixture_names",
+            data=np.asarray(MIXTURE_NAMES, dtype="S"),
+        )
         mixtures = h5.create_group("mixtures")
         _write_mixture(
             mixtures,
@@ -94,8 +98,9 @@ def _write_mixture(
     group.attrs["volume"] = 64.0
     group.create_dataset("total", data=total)
     group.create_dataset("absorption", data=absorption)
-    group.create_dataset("fission", data=np.zeros(2))
-    group.create_dataset("nu_fission", data=np.zeros(2))
+    fission = np.array([0.02, 0.04]) if fissionable else np.zeros(2)
+    group.create_dataset("fission", data=fission)
+    group.create_dataset("nu_fission", data=2.5 * fission)
     group.create_dataset("chi", data=np.array([1.0, 0.0]) if fissionable else np.zeros(2))
     group.create_dataset("scatter_matrix", data=scatter)
     group.create_dataset("transport_total", data=transport)

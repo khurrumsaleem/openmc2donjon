@@ -30,6 +30,7 @@ import {
 import {
   OPENMC_SPH_FIXED_POLICY,
   OPENMC_SPH_UPDATE_GATE,
+  openmcSphUncertaintyGate,
   parseOpenmcSphDamping,
 } from "@/lib/openmcSphExecution";
 import { equivalenceOptionsForKindSwitch } from "@/lib/equivalenceKindSwitch";
@@ -153,6 +154,13 @@ function EquivalencePageContent() {
     [info.outputPlaceholder, kind, options, outputTouched],
   );
   const cli = buildEquivalenceCli(activeOptions);
+  const uncertaintyGate = openmcSphUncertaintyGate(
+    options.sphTarget,
+    options.maxReferenceFluxStdDevRel,
+    options.maxMgFluxStdDevRel,
+  );
+  const uncertaintyHold =
+    kind === "openmc-sph-sidecar" && !uncertaintyGate.ok;
   const missingOpenmcSphInputs =
     kind === "openmc-sph-sidecar"
       ? [
@@ -174,7 +182,10 @@ function EquivalencePageContent() {
     ? damping.message
     : null;
   const commandReady =
-    !isIrenaColorset && missingInputs.length === 0 && dampingIssue === null;
+    !isIrenaColorset &&
+    missingInputs.length === 0 &&
+    dampingIssue === null &&
+    !uncertaintyHold;
   const canUseSavedPrefix =
     settingsHydrated &&
     savedPrefix !== "" &&
@@ -240,6 +251,18 @@ function EquivalencePageContent() {
       setExecutionState({ kind: "error", message: parsedDamping.message });
       return;
     }
+    const uncertainty = openmcSphUncertaintyGate(
+      options.sphTarget,
+      options.maxReferenceFluxStdDevRel,
+      options.maxMgFluxStdDevRel,
+    );
+    if (!uncertainty.ok) {
+      setExecutionState({
+        kind: "error",
+        message: `Physical route HOLD: ${uncertainty.issues.join(" ")}`,
+      });
+      return;
+    }
     setExecutionState({ kind: "loading", operation: "ratio" });
     try {
       const data = await api.executeSphSidecar({
@@ -253,6 +276,16 @@ function EquivalencePageContent() {
         damping: parsedDamping.value,
         flux_normalization: "auto",
         sph_target: "rate",
+        require_reference_flux_std_dev:
+          options.sphTarget === "rate" ||
+          uncertainty.ceMaxRelativeStdDev != null,
+        max_reference_flux_std_dev_rel:
+          uncertainty.ceMaxRelativeStdDev,
+        require_mg_flux_std_dev:
+          options.sphTarget === "rate" ||
+          uncertainty.mgMaxRelativeStdDev != null,
+        max_mg_flux_std_dev_rel:
+          uncertainty.mgMaxRelativeStdDev,
         zero_flux_policy: "reject",
         flux_floor_rel: null,
         freeze_groups: [],
@@ -300,17 +333,17 @@ function EquivalencePageContent() {
       <div className="app-container max-w-5xl">
         <WorkflowPageHeader
           step="SPH"
-          eyebrow={isIrenaColorset ? `Withdrawn IRENA diagnostic · ${activeColorset.id}` : "Optional physical equivalence"}
+          eyebrow={isIrenaColorset ? `Withdrawn IRENA diagnostic · ${activeColorset.id}` : selectedRoute === "native" ? "Advanced · project-specific equivalence" : "Recommended physical-equivalence route"}
           title={isIrenaColorset ? "Review archived five-colorset SPH evidence" : selectedRoute === "native" ? "Run native DRAGON SPH on the declared coarse model" : "Run the optional OpenMC-side CE/MG SPH loop"}
-          description={isIrenaColorset ? "This legacy route preserves paths, CLI text, and prior summaries for diagnosis only. It cannot compute or apply factors and cannot advance a production handoff." : selectedRoute === "native" ? "This route consumes a production Converter reference MACROLIB and solves the SPH fixed point in DRAGON. It does not require an OpenMC MG rerun." : "This separate alternate route compares matched OpenMC CE and MG calculations. Its 2% update gate is an iteration gate, never final component or full-core acceptance."}
-          input={isIrenaColorset ? "Archived CE/MG paths and SPH summaries" : selectedRoute === "native" ? "Fine reference + production Converter MACROLIB + coarse-model deck" : "Matched OpenMC CE/MG fluxes + Converter-layout HDF5"}
-          output={isIrenaColorset ? "No new factors or production artifact" : selectedRoute === "native" ? "Native-SPH MACROLIB + independent acceptance summary" : "OpenMC-side update + SPH-applied HDF5"}
+          description={isIrenaColorset ? "This legacy route preserves paths, CLI text, and prior summaries for diagnosis only. It cannot compute or apply factors and cannot advance a production handoff." : selectedRoute === "native" ? "This advanced route consumes a production Converter reference MACROLIB and solves the SPH fixed point in DRAGON. Use it only when the project contract explicitly declares native SPH." : "The CE fine reference and MG coarse model use different geometries. Score the CE tallies on the MG transport group boundaries, and align physical state, boundary conditions, and the declared fine-to-coarse domain mapping; iterate the rate-preserving update, write a corrected HDF5, then enter Converter."}
+          input={isIrenaColorset ? "Archived CE/MG paths and SPH summaries" : selectedRoute === "native" ? "Fine reference + production Converter MACROLIB + coarse-model deck" : "Heterogeneous CE flux + homogenized MG flux + Converter-layout HDF5"}
+          output={isIrenaColorset ? "No new factors or production artifact" : selectedRoute === "native" ? "Native-SPH MACROLIB + independent acceptance summary" : "Converged rate-preserving update + corrected HDF5"}
           actions={
             <Link
               href={isIrenaColorset ? "/donjon?mode=irena30-fullcore" : selectedRoute === "native" ? nativeConverterHref : equivalenceRouteHref({ route: "native", projectRoot, componentId })}
               className="btn btn-secondary"
             >
-              {isIrenaColorset ? "Open current IRENA route" : selectedRoute === "native" ? "Build production MACROLIB" : "Back to native DRAGON SPH"}
+              {isIrenaColorset ? "Open IRENA research template" : selectedRoute === "native" ? "Build production MACROLIB" : "Advanced: native DRAGON SPH"}
             </Link>
           }
         />
@@ -324,7 +357,7 @@ function EquivalencePageContent() {
         ) : null}
 
         {!isIrenaColorset && selectedRoute === "native" ? (
-          <NativeSphPrimaryRoute
+          <NativeSphAdvancedRoute
             converterHref={nativeConverterHref}
             projectRoot={projectRoot}
             componentId={componentId ?? ""}
@@ -335,14 +368,12 @@ function EquivalencePageContent() {
           />
         ) : null}
 
-        {isIrenaColorset || selectedRoute === "native" ? (
-          <OpenmcSphPhysicsSummaryCard
-            path={summaryPath}
-            onPathChange={setSummaryPath}
-            onBrowse={() => setBrowserTarget("summary")}
-            autoLoadPath={searchParams.get("summary_json") ?? searchParams.get("summary")}
-          />
-        ) : null}
+        <OpenmcSphPhysicsSummaryCard
+          path={summaryPath}
+          onPathChange={setSummaryPath}
+          onBrowse={() => setBrowserTarget("summary")}
+          autoLoadPath={searchParams.get("summary_json") ?? searchParams.get("summary")}
+        />
 
         {isIrenaColorset || selectedRoute === "openmc-side" ? <section
           className="mt-5 rounded-xl border border-[var(--edge)] bg-black/10 p-3"
@@ -351,8 +382,10 @@ function EquivalencePageContent() {
             OpenMC-side CE/MG SPH operations
           </h2>
           <p className="mt-2 text-[12px] leading-5 text-[var(--fg-3)]">
-            This is a separate, optional method. It requires a matched OpenMC MG
-            rerun after every update and is not a prerequisite for native DRAGON SPH.
+            This is the recommended rate-preserving route. The heterogeneous CE
+            reference and homogenized coarse MG model are different geometries;
+            their group/state/boundary/domain mapping contract must remain aligned
+            while OpenMC MG is rerun after every update.
           </p>
         <EquivalenceTabs active={kind} colorsetId={isIrenaColorset ? activeColorset.id : null} componentId={componentId} projectRoot={projectRoot} />
 
@@ -367,10 +400,10 @@ function EquivalencePageContent() {
             </>
           ) : isPrimarySph ? (
             <>
-              This optional OpenMC MG-side method computes a rate-preserving update,
-              reruns the homogenized MG model, and repeats until its declared residuals
-              converge. It is a cross-check or alternate project method, not a required
-              step before Converter.
+              The standard OpenMC CE/MG method computes a rate-preserving update,
+              reruns the homogenized coarse MG model, and repeats until its declared
+              residuals converge. Apply the converged factors to write the corrected
+              HDF5 before entering Converter as the formal handoff boundary.
             </>
           ) : isSupportingSph ? (
             <>
@@ -530,6 +563,12 @@ function EquivalencePageContent() {
                   {missingInputs.length > 0 ? `Missing: ${missingInputs.join(", ")}.` : null}
                   {missingInputs.length > 0 && dampingIssue ? " " : null}
                   {dampingIssue ? `Invalid damping: ${dampingIssue}` : null}
+                  {(missingInputs.length > 0 || dampingIssue) && uncertaintyHold
+                    ? " "
+                    : null}
+                  {uncertaintyHold
+                    ? `Physical route HOLD: ${uncertaintyGate.issues.join(" ")}`
+                    : null}
                 </p>
               ) : null}
               {kind === "openmc-sph-sidecar" ? (
@@ -690,18 +729,18 @@ function EquivalenceRouteChooser({
 }) {
   const routes = [
     {
-      id: "native" as const,
-      eyebrow: "DRAGON coarse-model solve",
-      title: "Native DRAGON SPH",
-      body: "Converter reference MACROLIB → DRAGON SPH fixed point → DONJON verification. No OpenMC MG rerun is required.",
-      badge: "Primary route",
+      id: "openmc-side" as const,
+      eyebrow: "Different geometries · matched physics contract",
+      title: "OpenMC CE fine → OpenMC MG coarse",
+      body: "Score CE tallies on the MG group boundaries and align state, boundary conditions, and fine-to-coarse domain mapping; iterate rate-preserving SPH, write the corrected HDF5, then enter Converter.",
+      badge: "Recommended route",
     },
     {
-      id: "openmc-side" as const,
-      eyebrow: "Matched CE/MG alternate method",
-      title: "OpenMC-side CE/MG SPH",
-      body: "Compare matched OpenMC CE and MG fluxes, apply the update, and rerun MG until the 2% update gate passes.",
-      badge: "Optional route",
+      id: "native" as const,
+      eyebrow: "Explicit DRAGON coarse-model contract",
+      title: "Native DRAGON SPH",
+      body: "Converter reference MACROLIB → DRAGON SPH fixed point → DONJON verification. Keep this route only for a project that explicitly declares it.",
+      badge: "Advanced · project-specific",
     },
   ];
   return (
@@ -738,7 +777,7 @@ function EquivalenceRouteChooser({
   );
 }
 
-function NativeSphPrimaryRoute({
+function NativeSphAdvancedRoute({
   converterHref,
   projectRoot,
   componentId,
@@ -782,14 +821,14 @@ function NativeSphPrimaryRoute({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-[10px] font-bold uppercase tracking-[0.15em] text-emerald-200">
-            Primary physical route
+            Advanced · project-specific route
           </div>
           <h2 className="mt-1 text-lg font-bold tracking-tight">
-            Converter first; native SPH on the real coarse model
+            Explicit native SPH contract on the declared coarse model
           </h2>
         </div>
         <span className="rounded-full border border-emerald-200/25 px-2 py-1 font-mono text-[9px] uppercase text-emerald-100">
-          OpenMC MG optional
+          Not the default
         </span>
       </div>
       <div className="mt-4 grid gap-2 lg:grid-cols-4">
@@ -812,7 +851,8 @@ function NativeSphPrimaryRoute({
         </Link>
       </div>
       <p className="mt-3 text-[11px] leading-5 text-[var(--fg-3)]">
-        The native <span className="font-mono">SPH:</span> deck belongs to the
+        Use this advanced route only when the project contract explicitly
+        requires native DRAGON SPH. The <span className="font-mono">SPH:</span> deck belongs to the
         user-declared coarse geometry (or the project manifest when one is in
         use). A generic DONJON eigenvalue smoke deck cannot replace that
         fixed-point solve.
@@ -1113,21 +1153,30 @@ function OpenmcSphSidecarFields({
   setBrowserTarget,
 }: FieldGroupProps) {
   const damping = parseOpenmcSphDamping(options.damping);
+  const uncertaintyGate = openmcSphUncertaintyGate(
+    options.sphTarget,
+    options.maxReferenceFluxStdDevRel,
+    options.maxMgFluxStdDevRel,
+  );
   return (
     <section className="rounded-lg border border-[var(--edge)] bg-white/[0.015] p-4">
       <h3 className="text-sm font-semibold tracking-tight">OpenMC CE/MG SPH options</h3>
       <p className="mt-1 text-[12px] leading-relaxed text-[var(--fg-3)]">
-        Use fluxes from the same OpenMC geometry and output regions: CE is the reference;
-        MG is the macro calculation being corrected.
+        CE is the heterogeneous fine-geometry reference; MG is the homogenized
+        coarse-geometry calculation being corrected. The geometries differ, so
+        require the CE tally bins to match the MG transport group boundaries,
+        plus the same physical state and boundary conditions and an explicit
+        fine-to-coarse domain mapping.
       </p>
       <div className="mt-3 rounded-md border border-emerald-300/20 bg-emerald-300/[0.055] px-3 py-2 text-[12px] leading-5 text-emerald-100">
         Physics-preserving production rules are active: rate target, power
         normalization, zero-bin rejection, uncertainty gates, and no frozen
         groups, flux floors, clipping, or k-effective fitting.
-        No k-effective fitting or global empirical multiplier is allowed. For rate
-        SPH, the fixed point enforces Σ′φMG = ΣφCE with Σ′ = Σ/NSPH. Re-run the MG
-        model with each updated sidecar and repeat until the raw update residual is
-        within the declared convergence tolerance before handing factors to Converter.
+        No global empirical multiplier is allowed. For rate SPH, the fixed
+        point enforces Σ′φMG = ΣφCE with Σ′ = Σ/NSPH. Re-run the MG model with
+        each updated sidecar and repeat until the raw update residual is within
+        the declared convergence tolerance. Apply the converged factors to
+        write the corrected HDF5 before entering Converter.
       </div>
       <div className="mt-3 rounded-md border border-amber-300/25 bg-amber-300/[0.06] px-3 py-2 text-[12px] leading-5 text-amber-100">
         <strong>Iteration gate: raw update residual ≤ {(OPENMC_SPH_UPDATE_GATE * 100).toFixed(0)}%.</strong>{" "}
@@ -1149,6 +1198,58 @@ function OpenmcSphSidecarFields({
           onBrowse={() => setBrowserTarget("mgFlux")}
           placeholder="openmc_mg_flux.h5::openmc_mg_flux"
         />
+      </div>
+      <div className="mt-4 rounded-md border border-cyan-300/20 bg-cyan-300/[0.045] p-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h4 className="text-[12px] font-semibold tracking-tight text-[var(--fg-1)]">
+              Required project uncertainty gates
+            </h4>
+            <p className="mt-1 text-[11px] leading-4 text-[var(--fg-3)]">
+              Enter independent limits for the maximum tally standard deviation
+              divided by its mean. These are project acceptance inputs; the web
+              route has no silent default.
+            </p>
+          </div>
+          <span
+            className={
+              "rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wider " +
+              (uncertaintyGate.ok
+                ? "border-emerald-300/30 text-emerald-200"
+                : "border-amber-300/30 text-amber-100")
+            }
+          >
+            {uncertaintyGate.ok ? "Declared" : "Physical route HOLD"}
+          </span>
+        </div>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <TextField
+            label="CE max relative std dev *"
+            value={options.maxReferenceFluxStdDevRel}
+            onChange={(value) => patch({ maxReferenceFluxStdDevRel: value })}
+            placeholder="project-declared limit (no default)"
+            mono
+            hint="Required for rate-preserving SPH; applied to the heterogeneous CE reference flux."
+          />
+          <TextField
+            label="MG max relative std dev *"
+            value={options.maxMgFluxStdDevRel}
+            onChange={(value) => patch({ maxMgFluxStdDevRel: value })}
+            placeholder="project-declared limit (no default)"
+            mono
+            hint="Required for rate-preserving SPH; applied independently to the homogenized MG flux."
+          />
+        </div>
+        {!uncertaintyGate.ok ? (
+          <p className="mt-2 text-[11px] leading-4 text-amber-100">
+            {uncertaintyGate.issues.join(" ")}
+          </p>
+        ) : (
+          <p className="mt-2 text-[11px] leading-4 text-emerald-100">
+            The execution request and copied CLI will require both std-dev
+            datasets and enforce these two declared limits.
+          </p>
+        )}
       </div>
       <div className="mt-4 rounded-md border border-[var(--edge)] bg-black/10 p-3">
         <h4 className="text-[12px] font-semibold tracking-tight text-[var(--fg-2)]">

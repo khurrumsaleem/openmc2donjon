@@ -26,6 +26,7 @@ import {
   projectComponentConvertHref,
   projectComponentEquivalenceHref,
   projectComponentPrepareHref,
+  projectComponentStartHref,
   projectConsumerActionLabel,
   projectConsumerHref,
   projectEquivalenceActionLabel,
@@ -542,8 +543,8 @@ export default function ProjectWorkspace() {
                 className="mt-1 w-full rounded-md border border-[var(--edge)] px-3 py-2 text-sm"
               >
                 <option value="converter-hdf5">Converter HDF5</option>
-                <option value="physical-sph">Physical SPH sidecar</option>
-                <option value="native-sph">Native DRAGON SPH</option>
+                <option value="physical-sph">Recommended OpenMC CE/MG SPH</option>
+                <option value="native-sph">Advanced · native DRAGON SPH</option>
               </select>
             </label>
             <label className="block">
@@ -802,6 +803,21 @@ function StageCell({ status, pendingLabel, emphasized = false }: { status: Proje
 
 function NextAction({ projectRoot, component, withdrawnReviewHref }: { projectRoot: string; component: ProjectComponentStatus; withdrawnReviewHref: string | null }) {
   if (withdrawnReviewHref) return <Link href={withdrawnReviewHref} className="text-[11px] font-bold text-amber-100">Review archived diagnostic →</Link>;
+  if (component.contract === "physical-sph") {
+    if (component.handoff.state !== "accepted") {
+      return (
+        <Link href={projectComponentStartHref(projectRoot, component)} className="text-[11px] font-bold text-[var(--accent)]">
+          {component.handoff.state === "rejected"
+            ? "Complete CE/MG SPH correction →"
+            : "Prepare CE/MG SPH inputs →"}
+        </Link>
+      );
+    }
+    if (component.output.state !== "accepted") {
+      return <Link href={projectComponentConvertHref(projectRoot, component)} className="text-[11px] font-bold text-[var(--accent)]">Run Converter →</Link>;
+    }
+    return <span className="text-[11px] font-bold text-emerald-100">Complete ✓</span>;
+  }
   if (component.handoff.state !== "accepted") return (
     <div className="space-y-1.5">
       <Link href={projectComponentConvertHref(projectRoot, component)} className="block text-[11px] font-bold text-[var(--accent)]">
@@ -826,9 +842,9 @@ function nativeConverterReferenceMissing(component: ProjectComponentStatus): boo
 }
 
 function contractLabel(contract: ProjectComponentStatus["contract"]): string {
-  if (isNativeSphContract(contract)) return "Converter reference + native DRAGON SPH";
+  if (isNativeSphContract(contract)) return "Advanced: Converter reference + native DRAGON SPH";
   if (isIrenaColorsetSphContract(contract)) return "IRENA seven-domain physical SPH";
-  if (isPhysicalSphContract(contract)) return "strict physical SPH (arbitrary declared domains)";
+  if (contract === "physical-sph") return "Recommended OpenMC CE/MG rate-preserving SPH";
   return "standard Converter HDF5";
 }
 

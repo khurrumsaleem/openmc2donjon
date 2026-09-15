@@ -45,17 +45,19 @@ def build_library():
 
         library = mgxs.Library(geometry)
         library.energy_groups = mgxs.EnergyGroups(C5G7_7G_BOUNDS)
-        # The accepted C5G7 statepoint was generated with OpenMC's
-        # consistent nu-scatter matrix tally set. Keep that choice explicit so
-        # the recipe/statepoint parity check remains a true locked-baseline
-        # reproduction instead of silently switching scatter definitions.
+        # C5G7's supplied macroscopic library has unit scattering
+        # multiplicity: the saved reference statepoint's scatter and
+        # nu-scatter reaction-rate tallies are identical in every bin.  Use
+        # the ordinary consistent estimator so this thermal benchmark does
+        # not pretend to exercise an (n,xn) transfer contract.
         library.mgxs_types = [
             "total",
             "absorption",
             "fission",
             "nu-fission",
             "chi",
-            "consistent nu-scatter matrix",
+            "consistent scatter matrix",
+            "transport",
         ]
         if _domain_mode() == "material":
             library.domain_type = "material"
@@ -85,7 +87,7 @@ def domain_specs(library):
 
 
 def scatter_mgxs_type():
-    return "consistent nu-scatter matrix"
+    return "consistent scatter matrix"
 
 
 def root_attrs():

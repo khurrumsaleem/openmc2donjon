@@ -10,13 +10,21 @@ from typing import Iterable
 import numpy as np
 
 from .hdf5_names import read_mixture_names, write_string_dataset
+from .mgxs_physics_checks import evaluate_mgxs_physics
 
 
 SCHEMA = "openmc2donjon.component-collapse.v1"
+SCATTER_CONTRACT_ATTRS = (
+    "openmc_scatter_mgxs_type",
+    "openmc_scatter_multiplicity_weighted",
+    "openmc_scatter_balance_dataset",
+    "openmc_transport_mgxs_type",
+)
 VECTOR_XS = (
     "total",
     "transport_total",
     "absorption",
+    "reduced_absorption",
     "fission",
     "nu_fission",
     "kappa_fission",
@@ -76,11 +84,17 @@ def collapse_components(
             else np.asarray(source["openmc_volume_flux_std_dev"][:], dtype=float)
         )
         by_name = {name: index for index, name in enumerate(source_names)}
+        scatter_contract = _require_common_scatter_contract(
+            source,
+            source_names=source_names,
+            ngroups=ngroups,
+        )
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         with h5py.File(destination, "w") as output:
             for key, value in source.attrs.items():
                 output.attrs[key] = value
+            _write_scatter_contract_attrs(output.attrs, scatter_contract)
             output.attrs["component_collapse_schema"] = SCHEMA
             output.attrs["component_collapse_source"] = str(source_path)
             output.attrs["component_collapse_weight"] = "openmc-volume-integrated-flux"
@@ -119,7 +133,13 @@ def collapse_components(
 
                 member_groups = [source["mixtures"][name] for name in members]
                 target = output_mixtures.create_group(output_name)
-                _write_component_attrs(target, member_groups, members, output_index)
+                _write_component_attrs(
+                    target,
+                    member_groups,
+                    members,
+                    output_index,
+                    scatter_contract=scatter_contract,
+                )
                 _write_component_datasets(
                     target,
                     member_groups,
@@ -172,12 +192,20 @@ def collapse_components(
     return report
 
 
-def _write_component_attrs(target, member_groups, members, output_index: int) -> None:
+def _write_component_attrs(
+    target,
+    member_groups,
+    members,
+    output_index: int,
+    *,
+    scatter_contract: tuple[str | None, bool, str, str | None, bool],
+) -> None:
     first = member_groups[0]
     for key, value in first.attrs.items():
         if key in {"source_domain_id", "source_domain_index", "volume"}:
             continue
         target.attrs[key] = value
+    _write_scatter_contract_attrs(target.attrs, scatter_contract)
     volumes = np.asarray(
         [float(group.attrs.get("volume", 1.0)) for group in member_groups],
         dtype=float,
@@ -189,6 +217,97 @@ def _write_component_attrs(target, member_groups, members, output_index: int) ->
     target.attrs["source_domain_type"] = "component-collapse"
     target.attrs["collapsed_source_mixtures"] = np.asarray(members, dtype="S")
     target.attrs["collapsed_source_count"] = len(members)
+
+
+def _require_common_scatter_contract(
+    source,
+    *,
+    source_names: tuple[str, ...],
+    ngroups: int,
+) -> tuple[str | None, bool, str, str | None, bool]:
+    """Resolve one physical scatter/removal convention before spatial mixing."""
+
+    physics = evaluate_mgxs_physics(
+        source,
+        mixture_names=source_names,
+        energy_groups=ngroups,
+        legendre_order=int(source.attrs.get("legendre_order", 0)),
+        root_energy_bounds=None,
+    )
+    if physics.scatter_row_balance_errors:
+        detail = "; ".join(physics.scatter_row_balance_errors)
+        raise ValueError(
+            "component collapse requires one coherent OpenMC scatter/removal "
+            f"contract across all source mixtures: {detail}"
+        )
+
+    transport_presence = [
+        "transport_total" in source["mixtures"][name]
+        for name in source_names
+    ]
+    if any(transport_presence) and not all(transport_presence):
+        missing = [
+            name
+            for name, present in zip(source_names, transport_presence, strict=True)
+            if not present
+        ]
+        raise ValueError(
+            "component collapse cannot mix source mixtures with and without "
+            "transport_total; missing: " + ", ".join(missing)
+        )
+    root_transport_declared = "openmc_transport_mgxs_type" in source.attrs
+    transport_declarations = [
+        root_transport_declared
+        or "openmc_transport_mgxs_type" in source["mixtures"][name].attrs
+        for name in source_names
+    ]
+    if all(transport_presence) and len(set(transport_declarations)) > 1:
+        raise ValueError(
+            "component collapse requires one consistently declared or legacy-inferred "
+            "OpenMC transport estimator across all source mixtures"
+        )
+
+    weighted = physics.openmc_scatter_multiplicity_weighted
+    balance = physics.openmc_scatter_balance_dataset
+    if weighted is None or balance is None:
+        raise ValueError(
+            "component collapse could not resolve a common OpenMC "
+            "scatter/removal contract"
+        )
+    if balance == "reduced_absorption":
+        missing = [
+            name
+            for name in source_names
+            if "reduced_absorption" not in source["mixtures"][name]
+        ]
+        if missing:
+            raise ValueError(
+                "component collapse requires reduced_absorption for every "
+                "nu-weighted source mixture; missing: " + ", ".join(missing)
+            )
+    return (
+        physics.openmc_scatter_mgxs_type,
+        bool(weighted),
+        str(balance),
+        physics.openmc_transport_mgxs_type,
+        bool(physics.openmc_transport_contract_declared),
+    )
+
+
+def _write_scatter_contract_attrs(
+    attrs,
+    contract: tuple[str | None, bool, str, str | None, bool],
+) -> None:
+    mgxs_type, weighted, balance, transport_type, transport_declared = contract
+    for name in SCATTER_CONTRACT_ATTRS:
+        if name in attrs:
+            del attrs[name]
+    if mgxs_type is not None:
+        attrs["openmc_scatter_mgxs_type"] = mgxs_type
+    attrs["openmc_scatter_multiplicity_weighted"] = bool(weighted)
+    attrs["openmc_scatter_balance_dataset"] = balance
+    if transport_type is not None and transport_declared:
+        attrs["openmc_transport_mgxs_type"] = transport_type
 
 
 def _write_component_datasets(

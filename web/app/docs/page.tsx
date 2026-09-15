@@ -20,9 +20,15 @@ const STARTING_POINTS = [
   },
   {
     title: "I have an OpenMC recipe or statepoint",
-    body: "Prepare the declared MGXS handoff first. This optional step stops before Converter writes a DRAGON/DONJON object.",
+    body: "Prepare the declared OpenMC artifacts first. If equivalence is required, apply CE/MG SPH before the HDF5 enters Converter.",
     href: "/openmc",
     action: "Prepare MGXS",
+  },
+  {
+    title: "I need fine-to-coarse equivalence",
+    body: "Use the heterogeneous CE fine reference and homogenized MG coarse model. Score CE tallies on the MG energy boundaries, match state and boundary conditions, declare the fine-to-coarse domain map, converge rate-preserving SPH, and write the corrected HDF5.",
+    href: "/equivalence",
+    action: "Open recommended SPH",
   },
   {
     title: "I need several components or repeated runs",
@@ -34,16 +40,22 @@ const STARTING_POINTS = [
 
 const RESPONSIBILITY_BOUNDARIES = [
   {
+    name: "OpenMC CE/MG SPH",
+    scope: "Recommended physical equivalence",
+    does: "Preserves rates between intentionally different fine heterogeneous and coarse homogenized geometries. CE tallies use the MG energy boundaries; state, boundary conditions, and the fine-to-coarse domain map are declared explicitly.",
+    doesNot: "Does not fit k-effective or make Converter the SPH iteration loop.",
+  },
+  {
     name: "Converter",
-    scope: "Required handoff boundary",
-    does: "Checks the declared input contract and mapping, writes L_MULTICOMPO or L_MACROLIB, and records a traceable receipt.",
-    doesNot: "Does not turn data integrity into a reactor-physics acceptance claim.",
+    scope: "Formal handoff boundary",
+    does: "After any required SPH correction, checks the MGXS contract and declared mixture/domain ordering, writes L_MULTICOMPO or L_MACROLIB, and records a traceable receipt.",
+    doesNot: "Does not validate the upstream conservative CE-to-MG map, perform SPH, or turn data integrity into a reactor-physics acceptance claim.",
   },
   {
     name: "Native DRAGON SPH",
-    scope: "Optional physical equivalence",
-    does: "Uses a frozen fine reference and a declared coarse model to establish the required rate equivalence.",
-    doesNot: "Does not permit ADF substitution, an empirical global factor, or an undeclared geometry shortcut.",
+    scope: "Advanced · project-specific",
+    does: "Supports an explicitly declared native coarse-model contract when a project requires that separate route.",
+    doesNot: "Is not the default route and does not permit ADF substitution, an empirical global factor, or an undeclared geometry shortcut.",
   },
   {
     name: "DONJON",
@@ -134,7 +146,7 @@ export default function DocumentationPage() {
           <h2 id="docs-boundary-title" className="mt-1 text-2xl font-bold tracking-[-0.03em]">
             A successful conversion is not a physics verdict
           </h2>
-          <div className="mt-5 grid gap-3 lg:grid-cols-3">
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {RESPONSIBILITY_BOUNDARIES.map((item) => (
               <article key={item.name} className="surface p-4">
                 <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">

@@ -146,6 +146,7 @@ for ((ITER=1; ITER<=SPH_ITERATIONS; ITER++)); do
     --table-output "$ITER_SPH_TABLE"
     --damping "$SPH_DAMPING"
     --flux-normalization auto
+    --sph-target flux
     --zero-flux-policy identity
     --flux-floor-rel "$SPH_FLUX_FLOOR_REL"
     --clip-min "$SPH_CLIP_MIN"

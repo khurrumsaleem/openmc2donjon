@@ -7,15 +7,16 @@ export type EquivalenceRoute = "native" | "openmc-side";
 
 export function resolveEquivalenceRoute(
   explicitRoute: string | null,
-  operationSelected: boolean,
+  _operationSelected: boolean,
   explicitContract?: string | null,
 ): EquivalenceRoute {
   if (explicitRoute === "native" || explicitRoute === "openmc-side") {
     return explicitRoute;
   }
-  return operationSelected || explicitContract === OPENMC_SIDE_SPH_CONTRACT
-    ? "openmc-side"
-    : "native";
+  if (explicitContract === NATIVE_SPH_CONTRACT) {
+    return "native";
+  }
+  return "openmc-side";
 }
 
 export function resolveEquivalenceContract(
@@ -26,9 +27,12 @@ export function resolveEquivalenceContract(
   if (route === "openmc-side" && !withdrawnColorset) {
     return OPENMC_SIDE_SPH_CONTRACT;
   }
+  if (route === "native" && !withdrawnColorset) {
+    return NATIVE_SPH_CONTRACT;
+  }
   return (
     explicitContract ??
-    (withdrawnColorset ? WITHDRAWN_COLORSET_CONTRACT : NATIVE_SPH_CONTRACT)
+    (withdrawnColorset ? WITHDRAWN_COLORSET_CONTRACT : OPENMC_SIDE_SPH_CONTRACT)
   );
 }
 

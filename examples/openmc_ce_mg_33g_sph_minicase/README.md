@@ -1,18 +1,26 @@
 # OpenMC CE/MG SPH Colorset Minicase
 
-This example is the new physics route for SPH equivalence:
+This is a reduced transport and handoff diagnostic for the OpenMC-side SPH
+machinery:
 
 ```text
 OpenMC continuous-energy reference
   + OpenMC multi-group macro calculation
-    using the selected energy mesh and the same geometry/output regions
-  -> OpenMC-side SPH factors
+    using the selected energy mesh on the same test partition
+  -> diagnostic flux-target SPH factors
   -> corrected MGXS HDF5 / SPH sidecar
   -> openmc2donjon L_MACROLIB ASCII for DONJON SPH consumption
 ```
 
-It deliberately does **not** use a DONJON feedback loop.  DONJON is only the
-downstream consumer of the corrected handoff.
+It deliberately does **not** use a DONJON feedback loop. DONJON is only the
+downstream consumer of the corrected handoff. This minicase also deliberately
+keeps the CE and MG spatial partition identical, so it tests the numerical
+loop and data handoff; it is not the standard physical homogenization claim.
+
+The standard physical route uses a detailed heterogeneous OpenMC CE reference
+geometry and a homogenized OpenMC MG coarse geometry. Their energy groups,
+state, boundary conditions, and comparison-domain mapping must be compatible;
+their geometric detail is intentionally different.
 
 ## Geometry
 
@@ -50,7 +58,7 @@ RUN_ROOT=/private/tmp/openmc2donjon_ce_mg_sph_five_region_2d \
 bash examples/openmc_ce_mg_33g_sph_minicase/run_workflow.sh
 ```
 
-The five-region variant uses the same CE/MG/SPH route, but exports five
+The five-region variant uses the same diagnostic CE/MG/SPH loop, but exports five
 OpenMC cell domains instead of three:
 
 ```text
@@ -61,10 +69,9 @@ CS_ABS    -> absorber/control-like output region
 CS_REF    -> reflector-like output region
 ```
 
-Use `two_region` to demonstrate the minimum multi-region SPH semantics.  Use
+Use `two_region` to demonstrate the minimum multi-region SPH mechanics. Use
 the three-region variant for fast interface checks.  Use `five_region_2d` when
-reviewing whether the OpenMC-side SPH route improves a larger low-order
-colorset diagnostic.
+reviewing the behavior of a larger same-partition low-order diagnostic.
 
 This concrete minicase uses the ECCO-33 energy mesh, but the workflow is not
 limited to 33 groups: any valid OpenMC MG group structure can be used as long
@@ -118,6 +125,7 @@ MG_MACRO_SCATTER_FORMAT=histogram
 MG_MACRO_HISTOGRAM_BINS=16
 SPH_ITERATIONS=1
 SPH_DAMPING=1.0
+SPH_TARGET=flux                    # this same-partition diagnostic only
 SPH_CLIP_MIN=
 SPH_CLIP_MAX=
 MAX_CE_FLUX_REL_STD=0.20
@@ -145,7 +153,7 @@ bins, use a smaller value such as `0.5` and optionally set `SPH_CLIP_MIN` /
 statistically weak group.
 
 The default particle counts are intentionally small so the workflow can be
-tested quickly.  They are not production statistics.  If any MG region
+tested quickly.  They are not high-statistics diagnostic settings.  If any MG region
 has zero sampled flux, the flux export/SPH gate should fail; increase
 `PARTICLES`/`BATCHES` rather than accepting a zero-flux SPH ratio.
 
@@ -167,7 +175,7 @@ handoff/openmc_sph_sidecar_iterNN.h5  per-iteration SPH factors if SPH_ITERATION
 handoff/mgxs_with_openmc_sph.h5  MGXS handoff after SPH augmentation
 handoff/out_with_openmc_sph.mcompo.txt  mapped XS handoff / archival route
 handoff/out_uncorrected.macrolib.txt  uncorrected DONJON MACROLIB baseline
-handoff/out_with_openmc_sph.macrolib.txt accepted DONJON SPH consumption route
+handoff/out_with_openmc_sph.macrolib.txt checked DONJON NSPH data-carriage path
 handoff/physics_summary.json     machine-readable CE/MG/SPH audit summary
 handoff/physics_summary.md       human-readable CE/MG/SPH audit summary
 ```
@@ -182,7 +190,8 @@ The SPH command gates both CE and MG flux uncertainty:
 ```
 
 That keeps noisy OpenMC flux ratios from being silently promoted into
-production SPH factors.
+high-statistics diagnostic SPH factors.  It does not turn this same-partition,
+flux-target example into accepted physical SPH.
 
 The physics summary records the CE/MG flux uncertainty, SPH factor range by
 mixture, and a reaction-rate preservation diagnostic.  The diagnostic compares
@@ -195,18 +204,27 @@ closure is the `--sph-target rate` fixed point.  It is
 meant for review and demos; it is not a substitute for a benchmark-quality
 validation.
 
-The summary also separates structural success from statistical quality:
+The summary separates structural success from statistical quality.  Its
+decision names predate the current physical-SPH contract and are retained for
+schema compatibility:
 
-- `openmc_ce_mg_sph_production_quality` means the HDF5/ASCII SPH handoff is
-  complete and both CE/MG flux relative standard deviations are at or below
-  5%.
-- `openmc_ce_mg_sph_demonstration_quality` means the route is suitable for a
-  quick demo, but flux statistics are above the production threshold.
-- `openmc_ce_mg_sph_statistical_review_required` means the route closed, but
-  the flux ratios are too noisy to present as production SPH evidence.
+- `openmc_ce_mg_sph_production_quality` is a historical label meaning only
+  that the HDF5/ASCII data-carriage path is complete and both CE/MG flux
+  relative standard deviations are at or below the 5% diagnostic review
+  threshold.  It is **not** a physical-SPH production acceptance.
+- `openmc_ce_mg_sph_demonstration_quality` means the diagnostic route is
+  suitable for a quick demo, but its flux statistics are above that 5%
+  threshold.
+- `openmc_ce_mg_sph_statistical_review_required` means the diagnostic route
+  completed, but the flux ratios are too noisy even for high-statistics
+  handoff evidence.
+
+The legacy JSON field `quality.production_ready` has the same limited meaning:
+structure plus the historical statistical threshold.  It must not be read as
+fine-to-coarse, rate-preserving physical acceptance.
 
 For example, an 8-batch / 2000-particle smoke on the development machine
-closed the full route and wrote P3 handoff data plus H16 MG-macro evidence, but
+completed the diagnostic pipeline and wrote P3 handoff data plus H16 MG-macro evidence, but
 the summary correctly marked it `statistical_review_required` because the
 largest CE/MG flux relative standard deviation was about 0.65.
 
@@ -227,12 +245,12 @@ bash examples/openmc_ce_mg_33g_sph_minicase/run_workflow.sh
 That run gave CE/MG flux relative standard deviations of 0.231 / 0.184 and an
 SPH range of 0.640 .. 1.326 (at these statistics the iterated factors are
 dominated by the flux-ratio noise, not by a systematic defect).  It is
-suitable as a live demonstration of the OpenMC-side SPH route, but it remains
-above the 5% production-quality threshold.
+suitable as a live demonstration of the OpenMC-side SPH machinery, but it
+remains above the 5% high-statistics diagnostic threshold.
 
-A local production-quality run reached the 5% CE/MG flux uncertainty target
-with higher MG statistics (all recorded production evidence uses the fixed
-update direction and `SPH_ITERATIONS=3`; the pre-fix records were
+A local high-statistics diagnostic reached the 5% CE/MG flux uncertainty
+target with higher MG statistics (all recorded diagnostic evidence uses the
+fixed update direction and `SPH_ITERATIONS=3`; the pre-fix records were
 invalidated):
 
 ```sh
@@ -250,10 +268,11 @@ and an SPH range of 0.96575 .. 1.08736 with no clipped bins.  The summary
 decision was `openmc_ce_mg_sph_production_quality`.  The flux-target update
 does not close the frozen-flux reaction-rate diagnostic (that closure is the
 `--sph-target rate` fixed point); the recorded rate residuals are reviewed in
-`PRODUCTION_EVIDENCE.md`.
+`PRODUCTION_EVIDENCE.md`.  The decision string is retained for compatibility
+and reports only handoff completeness plus the historical statistics gate.
 
-The larger `five_region_2d` variant has also closed the complete route at
-production quality:
+The larger `five_region_2d` variant has also completed the same-partition
+diagnostic pipeline at the 5% statistics threshold:
 
 ```sh
 OPENMC2DONJON_COLORSET_VARIANT=five_region_2d \
@@ -274,11 +293,11 @@ SPH-corrected operator and moved k, the CE flux-shape residuals, and the CE
 reaction-rate residual toward the OpenMC CE reference for both diffusion and
 SPN3.  The detailed table is in `NEXT_PHYSICS_VALIDATION.md`.
 
-With the fixed update direction, `SPH_ITERATIONS=3` is the evidence default
+With the fixed update direction, `SPH_ITERATIONS=3` is the diagnostic default
 for this example: the first iteration removes the systematic CE/MG defect
 and later iterations sit at the Monte Carlo noise floor of the flux ratios.
 The previously recorded conclusion that iterating OpenMC MG overshoots and
-that one-shot SPH is the accepted path was measured with the inverted
+that one-shot SPH should be preferred was measured with the inverted
 pre-fix update and no longer applies.
 
 To close the downstream handoff, run the DONJON consumption smoke on the
@@ -325,8 +344,9 @@ For the exact interpretation of the diffusion/SPN3 diagnostic, see
 `DONJON_SOLVE_DIAGNOSTIC.md`.  For the proposed larger validation target, see
 `NEXT_PHYSICS_VALIDATION.md`.
 
-For a shorter presentation-ready summary of that high-statistics run, see
-`PRODUCTION_EVIDENCE.md`.
+For a shorter presentation-ready summary of that high-statistics diagnostic,
+see `PRODUCTION_EVIDENCE.md`; the filename is retained for existing links, not
+as a physical acceptance claim.
 
 ## Damping sweep review
 
@@ -402,6 +422,7 @@ openmc2donjon make-openmc-sph-sidecar handoff/mgxs_library.h5 \
   --reference-flux handoff/openmc_ce_flux.h5::openmc_volume_flux \
   --mg-flux handoff/openmc_mg_flux.h5::openmc_mg_flux \
   --table-output handoff/openmc_sph.csv \
+  --sph-target flux \
   --flux-normalization auto
 
 # Optional next OpenMC MG iteration: apply the current SPH factors to an
@@ -447,14 +468,17 @@ python examples/openmc_ce_mg_33g_sph_minicase/summarize_outputs.py \
   handoff remains Pn/Legendre.
 - SPH factors are generated on the OpenMC side from CE/MG flux comparison.
 - The converter carries those factors as `NSPH` into DONJON ASCII.
-- The accepted DONJON downstream route is `L_MACROLIB`, where `NSPH` is written
-  as `GROUP/*/NSPH` and can be consumed by DONJON `DSPH:`/`MAC:`.
+- The checked DONJON data-carriage path is `L_MACROLIB`, where `NSPH` is
+  written as `GROUP/*/NSPH` and can be consumed by DONJON `DSPH:`/`MAC:`.
 - DONJON-side SPH iteration is not part of this route.
 
 ## What It Does Not Prove
 
 - This is not a benchmark-quality k-effective validation.
-- The default statistics are too low for production SPH.
+- This same-partition flux-target example is not production physical SPH,
+  regardless of particle count.
+- The default statistics are also too low for its high-statistics diagnostic
+  review threshold.
 - `L_MULTICOMPO + NCR:` currently extracts the macroscopic XS but does not
   promote OpenMC-side `NSPH` into non-unity `GROUP/*/NSPH`; use `L_MACROLIB`
   for the SPH consumption smoke.

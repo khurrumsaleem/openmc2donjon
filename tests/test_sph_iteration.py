@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 import tempfile
@@ -9,10 +10,49 @@ import h5py
 import numpy as np
 
 from openmc2donjon.cli import main as cli_main
+from openmc2donjon.commands.sph import (
+    build_make_openmc_sph_sidecar_parser,
+    build_make_sph_update_table_parser,
+)
+from openmc2donjon.openmc_provenance import file_sha256
+from openmc2donjon.openmc_sph_sidecar import create_openmc_sph_sidecar
 from openmc2donjon.sph_iteration import create_sph_update_table
 
 
 class SphIterationTests(unittest.TestCase):
+    def test_openmc_sph_entrypoints_share_production_defaults(self) -> None:
+        sidecar_args = build_make_openmc_sph_sidecar_parser().parse_args(
+            [
+                "mgxs.h5",
+                "-o",
+                "sph.h5",
+                "--reference-flux",
+                "ce.h5",
+                "--mg-flux",
+                "mg.h5",
+            ]
+        )
+        table_args = build_make_sph_update_table_parser().parse_args(
+            [
+                "mgxs.h5",
+                "-o",
+                "sph.csv",
+                "--reference-flux",
+                "ce.h5",
+                "--low-order-flux",
+                "mg.h5",
+            ]
+        )
+        self.assertEqual(sidecar_args.sph_target, "rate")
+        self.assertEqual(sidecar_args.flux_normalization, "auto")
+        self.assertEqual(table_args.sph_target, "rate")
+        self.assertEqual(table_args.flux_normalization, "auto")
+
+        for function in (create_openmc_sph_sidecar, create_sph_update_table):
+            parameters = inspect.signature(function).parameters
+            self.assertEqual(parameters["sph_target"].default, "rate")
+            self.assertEqual(parameters["flux_normalization"].default, "auto")
+
     def test_rate_sph_can_pool_a_declared_mixture_symmetry_class(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -48,6 +88,8 @@ class SphIterationTests(unittest.TestCase):
                         str(mg_flux),
                         "--sph-target",
                         "rate",
+                        "--flux-normalization",
+                        "none",
                         "--damping",
                         "0.5",
                         "--tie-mixtures",
@@ -78,7 +120,10 @@ class SphIterationTests(unittest.TestCase):
             sidecar = root / "openmc_sph.h5"
             table = root / "openmc_sph.csv"
             summary = root / "openmc_sph_summary.json"
-            write_mgxs(mgxs)
+            write_mgxs(
+                mgxs,
+                h_factor={"fuel": np.asarray([19.0, 21.0])},
+            )
             reference_flux.write_text(
                 "mixture,group,reference_flux\n"
                 "fuel,1,1.21\nfuel,2,0.81\n"
@@ -114,8 +159,8 @@ class SphIterationTests(unittest.TestCase):
 
             expected = np.array(
                 [
-                    [np.sqrt(1.21), np.sqrt(0.81)],
-                    [np.sqrt(0.64), np.sqrt(1.44)],
+                    [1.0 / np.sqrt(1.21), 1.0 / np.sqrt(0.81)],
+                    [1.0 / np.sqrt(0.64), 1.0 / np.sqrt(1.44)],
                 ]
             )
             self.assertTrue(table.exists())
@@ -124,6 +169,19 @@ class SphIterationTests(unittest.TestCase):
                 self.assertEqual(bool(h5.attrs["sph_real"]), True)
                 self.assertEqual(bool(h5.attrs["sph_applied"]), False)
                 self.assertEqual(h5.attrs["source_table"], str(table))
+                self.assertEqual(h5.attrs["sph_target"], "rate")
+                self.assertEqual(h5.attrs["sph_flux_normalization"], "power")
+                self.assertEqual(
+                    h5.attrs["sph_derivation"],
+                    "rate-preserving-ce-mg-fixed-point",
+                )
+                self.assertEqual(h5.attrs["sph_input_h5_sha256"], file_sha256(mgxs))
+                self.assertEqual(
+                    h5.attrs["sph_reference_flux_sha256"],
+                    file_sha256(reference_flux),
+                )
+                self.assertEqual(h5.attrs["sph_mg_flux_sha256"], file_sha256(mg_flux))
+                self.assertFalse(bool(h5.attrs["sph_previous_sph_used"]))
                 np.testing.assert_allclose(h5["sph"][:], expected, rtol=1.0e-11)
             payload = json.loads(summary.read_text(encoding="utf-8"))
             self.assertEqual(payload["schema"], "openmc2donjon.openmc-sph-sidecar.v1")
@@ -132,6 +190,8 @@ class SphIterationTests(unittest.TestCase):
             self.assertEqual(payload["output_table"], str(table))
             self.assertEqual(payload["mg_flux_dataset"], "openmc_mg_flux")
             self.assertEqual(payload["source_label"], "openmc-ce-mg-sph")
+            self.assertEqual(payload["sph_target"], "rate")
+            self.assertEqual(payload["flux_normalization"], "power")
             self.assertIn("openmc_ce_reference_flux", payload["formula"])
 
     def test_openmc_sph_sidecar_records_flux_uncertainty(self) -> None:
@@ -170,6 +230,8 @@ class SphIterationTests(unittest.TestCase):
                         f"{mg_flux}::openmc_mg_flux",
                         "--table-output",
                         str(table),
+                        "--flux-normalization",
+                        "none",
                         "--require-reference-flux-std-dev",
                         "--max-reference-flux-std-dev-rel",
                         "0.03",
@@ -191,6 +253,69 @@ class SphIterationTests(unittest.TestCase):
             self.assertAlmostEqual(payload["reference_flux_max_relative_std_dev"], 0.02)
             self.assertEqual(payload["mg_flux_std_dev_dataset"], "openmc_mg_flux_std_dev")
             self.assertAlmostEqual(payload["mg_flux_max_relative_std_dev"], 0.04)
+            with h5py.File(sidecar, "r") as h5:
+                for prefix, expected_limit, expected_observed in (
+                    ("sph_reference_flux", 0.03, 0.02),
+                    ("sph_mg_flux", 0.05, 0.04),
+                ):
+                    self.assertTrue(
+                        bool(h5.attrs[f"{prefix}_uncertainty_require_coverage"])
+                    )
+                    self.assertTrue(bool(h5.attrs[f"{prefix}_uncertainty_coverage"]))
+                    self.assertAlmostEqual(
+                        float(h5.attrs[f"{prefix}_uncertainty_limit"]),
+                        expected_limit,
+                    )
+                    self.assertAlmostEqual(
+                        float(h5.attrs[f"{prefix}_uncertainty_observed_max_rel"]),
+                        expected_observed,
+                    )
+                    self.assertTrue(bool(h5.attrs[f"{prefix}_uncertainty_pass"]))
+                    self.assertTrue(bool(h5.attrs[f"{prefix}_layout_verified"]))
+
+    def test_openmc_sph_sidecar_binds_previous_sph_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            mgxs = root / "mgxs.h5"
+            reference_flux = root / "reference_flux.h5"
+            mg_flux = root / "mg_flux.h5"
+            previous_sph = root / "previous_sph.csv"
+            sidecar = root / "sph.h5"
+            write_mgxs(mgxs)
+            _write_flux_source(
+                reference_flux,
+                "reference_flux",
+                values=np.ones((2, 2)),
+            )
+            _write_flux_source(
+                mg_flux,
+                "mg_flux",
+                values=np.ones((2, 2)),
+            )
+            previous_sph.write_text(
+                "mixture,g1,g2\nfuel,1.0,1.0\nmoderator,1.0,1.0\n",
+                encoding="utf-8",
+            )
+
+            create_openmc_sph_sidecar(
+                mgxs,
+                sidecar,
+                reference_flux=f"{reference_flux}::reference_flux",
+                mg_flux=f"{mg_flux}::mg_flux",
+                previous_sph=previous_sph,
+                flux_normalization="none",
+            )
+
+            with h5py.File(sidecar, "r") as h5:
+                self.assertTrue(bool(h5.attrs["sph_previous_sph_used"]))
+                self.assertEqual(
+                    h5.attrs["sph_previous_sph_sha256"],
+                    file_sha256(previous_sph),
+                )
+                self.assertEqual(
+                    Path(str(h5.attrs["sph_previous_sph_path"])),
+                    previous_sph.resolve(),
+                )
 
     def test_openmc_sph_sidecar_can_require_flux_uncertainty(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -219,6 +344,8 @@ class SphIterationTests(unittest.TestCase):
                         f"{reference_flux}::openmc_volume_flux",
                         "--mg-flux",
                         f"{mg_flux}::openmc_mg_flux",
+                        "--flux-normalization",
+                        "none",
                         "--require-reference-flux-std-dev",
                     ]
                 )
@@ -256,6 +383,8 @@ class SphIterationTests(unittest.TestCase):
                         f"{reference_flux}::openmc_volume_flux",
                         "--mg-flux",
                         f"{mg_flux}::openmc_mg_flux",
+                        "--flux-normalization",
+                        "none",
                         "--max-reference-flux-std-dev-rel",
                         "0.05",
                     ]
@@ -272,7 +401,10 @@ class SphIterationTests(unittest.TestCase):
             table = root / "next_sph.csv"
             sidecar = root / "next_sph.h5"
             summary = root / "summary.json"
-            write_mgxs(mgxs)
+            write_mgxs(
+                mgxs,
+                h_factor={"fuel": np.asarray([19.0, 21.0])},
+            )
             reference_flux.write_text(
                 "\n".join(
                     [
@@ -333,10 +465,17 @@ class SphIterationTests(unittest.TestCase):
                 0,
             )
 
+            normalization_factor = 40.0 / (19.0 + 21.0 / 1.1)
             expected = np.array(
                 [
-                    [1.0 * np.sqrt(1.21), 1.1 * np.sqrt(0.81)],
-                    [0.9 * np.sqrt(0.64), 1.0 * np.sqrt(1.44)],
+                    [
+                        1.0 * np.sqrt(normalization_factor / (1.0 * 1.21)),
+                        1.1 * np.sqrt(normalization_factor / (1.1 * 0.81)),
+                    ],
+                    [
+                        0.9 * np.sqrt(normalization_factor / (0.9 * 0.64)),
+                        1.0 * np.sqrt(normalization_factor / (1.0 * 1.44)),
+                    ],
                 ]
             )
             with h5py.File(sidecar, "r") as h5:
@@ -346,19 +485,81 @@ class SphIterationTests(unittest.TestCase):
             self.assertEqual(
                 payload["formula"],
                 "next_sph = previous_sph * "
-                "(reference_flux / normalized_low_order_flux) ** damping",
+                "(normalized_low_order_flux / (previous_sph * reference_flux)) ** damping",
             )
-            self.assertEqual(payload["flux_normalization"], "none")
-            self.assertEqual(payload["normalization_factor"], 1.0)
+            self.assertEqual(payload["sph_target"], "rate")
+            self.assertEqual(payload["flux_normalization"], "power")
+            self.assertAlmostEqual(
+                payload["normalization_factor"],
+                normalization_factor,
+            )
             self.assertEqual(payload["energy_groups"], 2)
             self.assertEqual(payload["clipped_count"], 0)
             self.assertEqual(payload["clipped_bins"], [])
             self.assertEqual(payload["diagnostic_bin_limit"], 10)
             worst = payload["worst_residual_bins"][0]
             self.assertEqual(worst["mixture"], "moderator")
-            self.assertEqual(worst["group"], 2)
-            self.assertAlmostEqual(worst["raw_update"], 1.44)
-            self.assertAlmostEqual(worst["residual"], 1.44 - 1.0)
+            self.assertEqual(worst["group"], 1)
+            self.assertAlmostEqual(
+                worst["raw_update"],
+                normalization_factor / (0.9 * 0.64),
+            )
+            self.assertAlmostEqual(
+                worst["residual"],
+                normalization_factor / (0.9 * 0.64) - 1.0,
+            )
+
+    def test_rate_power_normalization_preserves_nonuniform_sph_fixed_point(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            mgxs = root / "mgxs.h5"
+            reference_flux = root / "reference_flux.csv"
+            low_order_flux = root / "low_order_flux.csv"
+            previous_sph = root / "previous_sph.csv"
+            table = root / "next_sph.csv"
+            write_mgxs(
+                mgxs,
+                h_factor={
+                    "fuel": np.asarray([2.0, 3.0]),
+                    "moderator": np.asarray([5.0, 7.0]),
+                },
+            )
+            previous = np.asarray([[0.5, 2.0], [1.5, 0.8]])
+            reference_flux.write_text(
+                "mixture,group,flux\n"
+                "fuel,1,1.0\nfuel,2,2.0\n"
+                "moderator,1,3.0\nmoderator,2,4.0\n",
+                encoding="utf-8",
+            )
+            low_order_flux.write_text(
+                "mixture,group,flux\n"
+                "fuel,1,0.5\nfuel,2,4.0\n"
+                "moderator,1,4.5\nmoderator,2,3.2\n",
+                encoding="utf-8",
+            )
+            previous_sph.write_text(
+                "mixture,g1,g2\nfuel,0.5,2.0\nmoderator,1.5,0.8\n",
+                encoding="utf-8",
+            )
+
+            report = create_sph_update_table(
+                mgxs,
+                table,
+                reference_flux=reference_flux,
+                low_order_flux=low_order_flux,
+                previous_sph=previous_sph,
+                sph_target="rate",
+                flux_normalization="power",
+            )
+
+            np.testing.assert_allclose(_read_sph_table(table), previous, rtol=1.0e-12)
+            self.assertAlmostEqual(report.normalization_factor, 1.0)
+            self.assertAlmostEqual(
+                report.reference_normalization_integral,
+                report.low_order_normalization_integral,
+            )
+            self.assertAlmostEqual(report.raw_update_minimum, 1.0)
+            self.assertAlmostEqual(report.raw_update_maximum, 1.0)
 
     def test_power_normalization_scales_low_order_flux_with_h_factor(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -394,6 +595,7 @@ class SphIterationTests(unittest.TestCase):
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
                 flux_normalization="power",
+                sph_target="flux",
                 summary_json=summary,
             )
 
@@ -469,6 +671,7 @@ class SphIterationTests(unittest.TestCase):
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
                 flux_normalization="power",
+                sph_target="flux",
             )
 
             factor = (10.0 * 10.0 + 20.0 * 100.0) / (10.0 + 100.0)
@@ -485,7 +688,7 @@ class SphIterationTests(unittest.TestCase):
             actual = np.asarray([float(row.split(",")[2]) for row in rows]).reshape(2, 2)
             np.testing.assert_allclose(actual, expected, rtol=1.0e-11)
 
-    def test_auto_normalization_resolves_to_power_when_h_factor_exists(self) -> None:
+    def test_default_normalization_resolves_to_power_when_h_factor_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             mgxs = root / "mgxs.h5"
@@ -518,11 +721,11 @@ class SphIterationTests(unittest.TestCase):
                 table,
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
-                flux_normalization="auto",
                 summary_json=summary,
             )
 
             self.assertEqual(report.flux_normalization, "power")
+            self.assertEqual(report.sph_target, "rate")
             self.assertEqual(
                 report.normalization_weight_source,
                 "H-FACTOR/kappa_fission (auto)",
@@ -534,7 +737,7 @@ class SphIterationTests(unittest.TestCase):
                 "H-FACTOR/kappa_fission (auto)",
             )
 
-    def test_auto_normalization_requires_h_factor(self) -> None:
+    def test_default_normalization_requires_h_factor(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             mgxs = root / "mgxs.h5"
@@ -557,7 +760,6 @@ class SphIterationTests(unittest.TestCase):
                     table,
                     reference_flux=reference_flux,
                     low_order_flux=low_order_flux,
-                    flux_normalization="auto",
                 )
 
     def test_rejects_nonpositive_low_order_flux(self) -> None:
@@ -654,6 +856,10 @@ class SphIterationTests(unittest.TestCase):
                         f"{flux}::reference_flux",
                         "--low-order-flux",
                         f"{flux}::low_order_flux",
+                        "--sph-target",
+                        "flux",
+                        "--flux-normalization",
+                        "none",
                         "--damping",
                         "0.5",
                     ]
@@ -707,6 +913,8 @@ class SphIterationTests(unittest.TestCase):
                 table,
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
+                sph_target="flux",
+                flux_normalization="none",
                 clip_max=1.5,
                 summary_json=summary,
             )
@@ -758,6 +966,10 @@ class SphIterationTests(unittest.TestCase):
                         str(low_order_flux),
                         "--previous-sph",
                         str(previous),
+                        "--sph-target",
+                        "flux",
+                        "--flux-normalization",
+                        "none",
                         "--damping",
                         "0.5",
                     ]
@@ -859,6 +1071,8 @@ class SphIterationTests(unittest.TestCase):
                 table,
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
+                sph_target="flux",
+                flux_normalization="none",
                 zero_flux_policy="identity",
                 summary_json=summary,
             )
@@ -867,6 +1081,8 @@ class SphIterationTests(unittest.TestCase):
                 control_table,
                 reference_flux=control_reference_flux,
                 low_order_flux=control_low_order_flux,
+                sph_target="flux",
+                flux_normalization="none",
             )
 
             self.assertEqual(report.zero_flux_policy, "identity")
@@ -915,6 +1131,8 @@ class SphIterationTests(unittest.TestCase):
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
                 previous_sph=previous_sph,
+                sph_target="flux",
+                flux_normalization="none",
                 zero_flux_policy="identity",
             )
 
@@ -1019,6 +1237,8 @@ class SphIterationTests(unittest.TestCase):
                 table,
                 reference_flux=f"{reference_flux}::openmc_volume_flux",
                 low_order_flux=f"{mg_flux}::openmc_mg_flux",
+                sph_target="flux",
+                flux_normalization="none",
                 zero_flux_policy="identity",
                 require_reference_flux_std_dev=True,
                 max_reference_flux_std_dev_rel=0.03,
@@ -1064,6 +1284,10 @@ class SphIterationTests(unittest.TestCase):
                         f"{mg_flux}::openmc_mg_flux",
                         "--table-output",
                         str(table),
+                        "--sph-target",
+                        "flux",
+                        "--flux-normalization",
+                        "none",
                         "--zero-flux-policy",
                         "identity",
                         "--summary-json",
@@ -1128,6 +1352,8 @@ class SphIterationTests(unittest.TestCase):
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
                 previous_sph=previous_sph,
+                sph_target="flux",
+                flux_normalization="none",
                 flux_floor_rel=1.0e-3,
                 summary_json=summary,
             )
@@ -1137,6 +1363,8 @@ class SphIterationTests(unittest.TestCase):
                 reference_flux=control_reference_flux,
                 low_order_flux=control_low_order_flux,
                 previous_sph=previous_sph,
+                sph_target="flux",
+                flux_normalization="none",
             )
 
             self.assertEqual(report.flux_floor_rel, 1.0e-3)
@@ -1181,6 +1409,8 @@ class SphIterationTests(unittest.TestCase):
                 table,
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
+                sph_target="flux",
+                flux_normalization="none",
                 flux_floor_rel=1.0e-3,
             )
             identity_report = create_sph_update_table(
@@ -1188,6 +1418,8 @@ class SphIterationTests(unittest.TestCase):
                 identity_table,
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
+                sph_target="flux",
+                flux_normalization="none",
                 zero_flux_policy="identity",
                 flux_floor_rel=1.0e-3,
             )
@@ -1298,6 +1530,10 @@ class SphIterationTests(unittest.TestCase):
                         f"{mg_flux}::openmc_mg_flux",
                         "--table-output",
                         str(table),
+                        "--sph-target",
+                        "flux",
+                        "--flux-normalization",
+                        "none",
                         "--flux-floor-rel",
                         "1.0e-3",
                         "--summary-json",
@@ -1348,6 +1584,8 @@ class SphIterationTests(unittest.TestCase):
                 reference_flux=reference_flux,
                 low_order_flux=low_order_flux,
                 previous_sph=previous_sph,
+                sph_target="flux",
+                flux_normalization="none",
                 freeze_groups=(2,),
                 summary_json=summary,
             )
@@ -1442,6 +1680,10 @@ class SphIterationTests(unittest.TestCase):
                         f"{mg_flux}::openmc_mg_flux",
                         "--table-output",
                         str(table),
+                        "--sph-target",
+                        "flux",
+                        "--flux-normalization",
+                        "none",
                         "--freeze-groups",
                         "2",
                         "--summary-json",
@@ -1493,6 +1735,7 @@ class SphIterationTests(unittest.TestCase):
                 previous_sph=previous_sph,
                 damping=0.5,
                 sph_target="rate",
+                flux_normalization="none",
                 summary_json=summary,
             )
 
@@ -1518,7 +1761,7 @@ class SphIterationTests(unittest.TestCase):
                 "(normalized_low_order_flux / (previous_sph * reference_flux)) ** damping",
             )
 
-    def test_default_flux_target_matches_explicit_flux_target(self) -> None:
+    def test_default_rate_target_matches_explicit_rate_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             mgxs = root / "mgxs.h5"
@@ -1527,7 +1770,11 @@ class SphIterationTests(unittest.TestCase):
             previous_sph = root / "previous_sph.csv"
             default_table = root / "default_sph.csv"
             explicit_table = root / "explicit_sph.csv"
-            write_mgxs(mgxs)
+            diagnostic_table = root / "diagnostic_flux_sph.csv"
+            write_mgxs(
+                mgxs,
+                h_factor={"fuel": np.asarray([1.0, 1.0])},
+            )
             reference_flux.write_text(
                 "mixture,group,flux\n"
                 "fuel,1,4.0\nfuel,2,9.0\n"
@@ -1560,19 +1807,30 @@ class SphIterationTests(unittest.TestCase):
                 low_order_flux=low_order_flux,
                 previous_sph=previous_sph,
                 damping=0.5,
+                sph_target="rate",
+                flux_normalization="auto",
+            )
+            create_sph_update_table(
+                mgxs,
+                diagnostic_table,
+                reference_flux=reference_flux,
+                low_order_flux=low_order_flux,
+                previous_sph=previous_sph,
+                damping=0.5,
                 sph_target="flux",
+                flux_normalization="auto",
             )
 
-            self.assertEqual(default_report.sph_target, "flux")
+            self.assertEqual(default_report.sph_target, "rate")
+            self.assertEqual(default_report.flux_normalization, "power")
             self.assertEqual(
                 default_table.read_text(encoding="utf-8"),
                 explicit_table.read_text(encoding="utf-8"),
             )
-            rows = default_table.read_text(encoding="utf-8").strip().splitlines()
-            self.assertIn("fuel,1,2.2", rows)
-            self.assertIn("fuel,2,3.6", rows)
-            self.assertIn("moderator,1,3.6", rows)
-            self.assertIn("moderator,2,5", rows)
+            self.assertNotEqual(
+                default_table.read_text(encoding="utf-8"),
+                diagnostic_table.read_text(encoding="utf-8"),
+            )
 
             with self.assertRaisesRegex(ValueError, "--sph-target must be one of"):
                 create_sph_update_table(
@@ -1616,6 +1874,7 @@ class SphIterationTests(unittest.TestCase):
                 low_order_flux=low_order_flux,
                 previous_sph=previous_sph,
                 sph_target="rate",
+                flux_normalization="none",
                 freeze_groups=(2,),
             )
 
@@ -1629,7 +1888,7 @@ class SphIterationTests(unittest.TestCase):
             np.testing.assert_allclose(actual[0, 0], 1.0 * (2.0 / 4.0), rtol=1.0e-11)
             np.testing.assert_allclose(actual[1, 0], 2.0 * (4.0 / 32.0), rtol=1.0e-11)
 
-    def test_cli_openmc_sph_sidecar_accepts_sph_target(self) -> None:
+    def test_cli_openmc_sph_sidecar_accepts_explicit_flux_diagnostic_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             mgxs = root / "mgxs.h5"
@@ -1664,7 +1923,9 @@ class SphIterationTests(unittest.TestCase):
                         "--table-output",
                         str(table),
                         "--sph-target",
-                        "rate",
+                        "flux",
+                        "--flux-normalization",
+                        "none",
                         "--summary-json",
                         str(summary),
                     ]
@@ -1672,26 +1933,24 @@ class SphIterationTests(unittest.TestCase):
                 0,
             )
 
-            # Unity previous SPH: s = phi_mg / phi_ref for the first iteration.
-            expected = np.array([[0.5, 1.0 / 3.0], [0.25, 0.2]])
+            expected = np.array([[2.0, 3.0], [4.0, 5.0]])
             with h5py.File(sidecar, "r") as h5:
                 np.testing.assert_allclose(h5["sph"][:], expected, rtol=1.0e-11)
                 self.assertEqual(
                     h5.attrs["sph_derivation"],
-                    "rate-preserving-ce-mg-fixed-point",
+                    "ce-mg-flux-fixed-point",
                 )
-                self.assertEqual(h5.attrs["sph_target"], "rate")
+                self.assertEqual(h5.attrs["sph_target"], "flux")
                 self.assertAlmostEqual(
                     float(h5.attrs["sph_max_update_residual"]),
-                    0.8,
+                    4.0,
                 )
             payload = json.loads(summary.read_text(encoding="utf-8"))
-            self.assertEqual(payload["sph_target"], "rate")
+            self.assertEqual(payload["sph_target"], "flux")
             self.assertEqual(
                 payload["formula"],
                 "sph = previous_sph * "
-                "(normalized_openmc_mg_flux / (previous_sph * openmc_ce_reference_flux)) "
-                "** damping",
+                "(openmc_ce_reference_flux / normalized_openmc_mg_flux) ** damping",
             )
 
 
@@ -1739,6 +1998,8 @@ def _write_flux_source(
         dataset = h5.create_dataset(dataset_name, data=np.asarray(values, dtype=float))
         dataset.attrs["group_order"] = "mgxs_donjon"
         dataset.attrs["mixture_names"] = np.asarray(("fuel", "moderator"), dtype="S")
+        dataset.attrs["energy_bounds_verified"] = True
+        dataset.attrs["spatial_domain_order_verified"] = True
         if std_dev is not None:
             std_dataset = h5.create_dataset(
                 f"{dataset_name}_std_dev",

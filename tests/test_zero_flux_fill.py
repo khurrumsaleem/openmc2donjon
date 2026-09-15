@@ -10,6 +10,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 import h5py
 import numpy as np
@@ -69,6 +70,7 @@ class _FakeXSData:
         self.total = [np.asarray(total, dtype=float)]
         self.absorption = [np.asarray(absorption, dtype=float)]
         self.scatter_matrix = [np.asarray(scatter, dtype=float)]
+        self.multiplicity_matrix = [None]
         self.fission = None if fission is None else [np.asarray(fission, dtype=float)]
         self.nu_fission = None if nu_fission is None else [np.asarray(nu_fission, dtype=float)]
 
@@ -172,8 +174,28 @@ def _write_converter_h5(path: Path, mixtures: dict[str, dict]) -> None:
 
 def _touch_macrolib(root: Path) -> Path:
     macrolib = root / "macrolib.h5"
-    macrolib.write_bytes(b"fake macrolib payload")
+    with h5py.File(macrolib, "w"):
+        pass
     return macrolib
+
+
+def _declare_scatter_contract(
+    path: Path,
+    *,
+    mgxs_type: str,
+    multiplicity_weighted: bool,
+    balance_dataset: str,
+) -> None:
+    with h5py.File(path, "r+") as h5:
+        h5.attrs["openmc_scatter_mgxs_type"] = mgxs_type
+        h5.attrs["openmc_scatter_multiplicity_weighted"] = multiplicity_weighted
+        h5.attrs["openmc_scatter_balance_dataset"] = balance_dataset
+        if "mixtures" in h5 and any(
+            "transport_total" in group for group in h5["mixtures"].values()
+        ):
+            h5.attrs["openmc_transport_mgxs_type"] = (
+                "nu-transport" if multiplicity_weighted else "transport"
+            )
 
 
 def _sha256(path: Path) -> str:
@@ -181,6 +203,318 @@ def _sha256(path: Path) -> str:
 
 
 class ZeroFluxFillTests(unittest.TestCase):
+    def test_malformed_target_arrays_fail_without_changing_in_place_input(self) -> None:
+        malformed = {
+            "reduced_absorption": np.zeros(GROUPS - 1),
+            "reduced_absorption_std_dev": np.zeros(GROUPS - 1),
+            "absorption": np.zeros(GROUPS - 1),
+            "total_std_dev": np.zeros(GROUPS - 1),
+            "nu_fission": np.zeros(GROUPS - 1),
+            "transport_total_std_dev": np.zeros(GROUPS - 1),
+            "scatter_matrix": np.zeros((2, GROUPS, GROUPS - 1)),
+            "scatter_matrix_std_dev": np.zeros((1, GROUPS, GROUPS)),
+        }
+        for dataset, values in malformed.items():
+            with self.subTest(dataset=dataset), tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                mgxs = root / "mgxs.h5"
+                macrolib = _touch_macrolib(root)
+                spec = _fuel_spec()
+                spec["datasets"]["reduced_absorption"] = (0.8, 1.8, 0.0, 0.0)
+                spec["datasets"][dataset] = values
+                _write_converter_h5(mgxs, {"fuel": spec})
+                for path in (mgxs, macrolib):
+                    _declare_scatter_contract(
+                        path,
+                        mgxs_type="consistent nu-scatter matrix",
+                        multiplicity_weighted=True,
+                        balance_dataset="reduced_absorption",
+                    )
+                library = _fake_library()
+                library.xsdatas[0].multiplicity_matrix[0] = np.ones((GROUPS, GROUPS))
+                digest = _sha256(mgxs)
+                with _fake_openmc(library), self.assertRaisesRegex(ValueError, dataset):
+                    fill_zero_flux_groups(mgxs, macrolib=macrolib, in_place=True)
+                self.assertEqual(_sha256(mgxs), digest)
+
+    def test_failed_provenance_refresh_preserves_source_and_existing_destination(self) -> None:
+        for in_place in (True, False):
+            with self.subTest(in_place=in_place), tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                mgxs = root / "mgxs.h5"
+                output = root / "existing.h5"
+                macrolib = _touch_macrolib(root)
+                _write_converter_h5(mgxs, {"fuel": _fuel_spec()})
+                _write_converter_h5(output, {"sodium": _sodium_spec()})
+                input_digest, output_digest = _sha256(mgxs), _sha256(output)
+                with (
+                    _fake_openmc(_fake_library()),
+                    patch(
+                        "openmc2donjon.zero_flux_fill.refresh_openmc_provenance_after_hdf5_mutation",
+                        side_effect=RuntimeError("refresh failed"),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "refresh failed"),
+                ):
+                    fill_zero_flux_groups(
+                        mgxs,
+                        macrolib=macrolib,
+                        in_place=in_place,
+                        output_h5=None if in_place else output,
+                        force=True,
+                    )
+                self.assertEqual(_sha256(mgxs), input_digest)
+                self.assertEqual(_sha256(output), output_digest)
+                self.assertFalse(list(root.glob(".openmc2donjon-zero-flux-*")))
+
+    def test_nu_scatter_fill_requires_explicit_matching_source_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            mgxs = root / "mgxs.h5"
+            output = root / "filled.h5"
+            macrolib = _touch_macrolib(root)
+            spec = _fuel_spec()
+            spec["datasets"]["reduced_absorption"] = (0.8, 1.8, 0.0, 0.0)
+            _write_converter_h5(mgxs, {"fuel": spec})
+            _declare_scatter_contract(
+                mgxs,
+                mgxs_type="consistent nu-scatter matrix",
+                multiplicity_weighted=True,
+                balance_dataset="reduced_absorption",
+            )
+            digest = _sha256(mgxs)
+
+            with _fake_openmc(_fake_library()):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "ordinary or undeclared scatter is not a valid substitute",
+                ):
+                    fill_zero_flux_groups(
+                        mgxs,
+                        macrolib=macrolib,
+                        output_h5=output,
+                    )
+
+            self.assertEqual(_sha256(mgxs), digest)
+            self.assertFalse(output.exists())
+
+    def test_nu_scatter_fill_derives_reduced_absorption_from_matching_source(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            mgxs = root / "mgxs.h5"
+            macrolib = _touch_macrolib(root)
+            spec = _fuel_spec()
+            spec["datasets"]["reduced_absorption"] = (0.8, 1.8, 0.0, 0.0)
+            spec["datasets"]["reduced_absorption_std_dev"] = (0.1, 0.1, 0.1, 0.1)
+            _write_converter_h5(mgxs, {"fuel": spec})
+            for path in (mgxs, macrolib):
+                _declare_scatter_contract(
+                    path,
+                    mgxs_type="consistent nu-scatter matrix",
+                    multiplicity_weighted=True,
+                    balance_dataset="reduced_absorption",
+                )
+            # A source library may also receipt the matching TransportXS
+            # estimator even though its native HDF5 layout does not contain a
+            # converter-facing ``transport_total`` dataset.
+            with h5py.File(macrolib, "r+") as h5:
+                h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
+            library = _fake_library()
+            # The lowest-energy source row emits 1.2 neutrons per unit path
+            # against total 1.0. Its exact reduced absorption is therefore
+            # -0.2; that negative value is physical and must not be clipped.
+            nu_scatter = library.xsdatas[0].scatter_matrix[0].copy()
+            nu_scatter[0, 0, 0] = 1.1
+            library.xsdatas[0].scatter_matrix[0] = nu_scatter
+            library.xsdatas[0].multiplicity_matrix[0] = np.ones((GROUPS, GROUPS))
+
+            with _fake_openmc(library):
+                report = fill_zero_flux_groups(
+                    mgxs,
+                    macrolib=macrolib,
+                    in_place=True,
+                )
+
+            self.assertEqual(report.total_filled_bins, 2)
+            with h5py.File(mgxs, "r") as h5:
+                fuel = h5["mixtures/fuel"]
+                np.testing.assert_allclose(
+                    fuel["reduced_absorption"][:],
+                    [0.8, 1.8, 0.85, -0.2],
+                    rtol=0.0,
+                    atol=1.0e-14,
+                )
+                np.testing.assert_array_equal(
+                    fuel["reduced_absorption_std_dev"][:],
+                    [0.1, 0.1, 0.0, 0.0],
+                )
+                np.testing.assert_array_equal(
+                    fuel["scatter_matrix"][0, 3],
+                    [0.0, 0.0, 0.1, 1.1],
+                )
+                self.assertEqual(
+                    fuel.attrs["zero_flux_transport_method"],
+                    "macrolib_nu_p1_outscatter",
+                )
+
+    def test_nu_scatter_attrs_without_multiplicity_matrix_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            mgxs = root / "mgxs.h5"
+            output = root / "filled.h5"
+            macrolib = _touch_macrolib(root)
+            spec = _fuel_spec()
+            spec["datasets"]["reduced_absorption"] = (0.8, 1.8, 0.0, 0.0)
+            _write_converter_h5(mgxs, {"fuel": spec})
+            for path in (mgxs, macrolib):
+                _declare_scatter_contract(
+                    path,
+                    mgxs_type="consistent nu-scatter matrix",
+                    multiplicity_weighted=True,
+                    balance_dataset="reduced_absorption",
+                )
+            digest = _sha256(mgxs)
+
+            with _fake_openmc(_fake_library()):
+                with self.assertRaisesRegex(ValueError, "multiplicity_matrix"):
+                    fill_zero_flux_groups(
+                        mgxs,
+                        macrolib=macrolib,
+                        output_h5=output,
+                    )
+
+            self.assertEqual(_sha256(mgxs), digest)
+            self.assertFalse(output.exists())
+
+    def test_nu_scatter_multiplicity_matrix_must_be_well_formed(self) -> None:
+        invalid_values = (
+            np.ones((GROUPS - 1, GROUPS)),
+            np.full((GROUPS, GROUPS), np.nan),
+            -np.ones((GROUPS, GROUPS)),
+        )
+        for multiplicity in invalid_values:
+            with self.subTest(shape=multiplicity.shape, value=multiplicity.flat[0]):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    mgxs = root / "mgxs.h5"
+                    output = root / "filled.h5"
+                    macrolib = _touch_macrolib(root)
+                    spec = _fuel_spec()
+                    spec["datasets"]["reduced_absorption"] = (0.8, 1.8, 0.0, 0.0)
+                    _write_converter_h5(mgxs, {"fuel": spec})
+                    for path in (mgxs, macrolib):
+                        _declare_scatter_contract(
+                            path,
+                            mgxs_type="consistent nu-scatter matrix",
+                            multiplicity_weighted=True,
+                            balance_dataset="reduced_absorption",
+                        )
+                    digest = _sha256(mgxs)
+                    library = _fake_library()
+                    library.xsdatas[0].multiplicity_matrix[0] = multiplicity
+
+                    with _fake_openmc(library):
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            "multiplicity_matrix must match.*finite and non-negative",
+                        ):
+                            fill_zero_flux_groups(
+                                mgxs,
+                                macrolib=macrolib,
+                                output_h5=output,
+                            )
+
+                    self.assertEqual(_sha256(mgxs), digest)
+                    self.assertFalse(output.exists())
+
+    def test_nu_scatter_rejects_ordinary_only_overshoot_criterion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            mgxs = root / "mgxs.h5"
+            macrolib = _touch_macrolib(root)
+            spec = _fuel_spec()
+            spec["datasets"]["reduced_absorption"] = (0.8, 1.8, 0.0, 0.0)
+            _write_converter_h5(mgxs, {"fuel": spec})
+            for path in (mgxs, macrolib):
+                _declare_scatter_contract(
+                    path,
+                    mgxs_type="consistent nu-scatter matrix",
+                    multiplicity_weighted=True,
+                    balance_dataset="reduced_absorption",
+                )
+            digest = _sha256(mgxs)
+
+            with _fake_openmc(_fake_library()):
+                with self.assertRaisesRegex(ValueError, "ordinary scatter"):
+                    fill_zero_flux_groups(
+                        mgxs,
+                        macrolib=macrolib,
+                        in_place=True,
+                        max_scatter_row_overshoot_rel=0.05,
+                    )
+
+            self.assertEqual(_sha256(mgxs), digest)
+
+    def test_nu_scatter_requires_reduced_absorption_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            mgxs = root / "mgxs.h5"
+            macrolib = _touch_macrolib(root)
+            _write_converter_h5(mgxs, {"fuel": _fuel_spec()})
+            for path in (mgxs, macrolib):
+                _declare_scatter_contract(
+                    path,
+                    mgxs_type="consistent nu-scatter matrix",
+                    multiplicity_weighted=True,
+                    balance_dataset="reduced_absorption",
+                )
+            digest = _sha256(mgxs)
+
+            with _fake_openmc(_fake_library()):
+                with self.assertRaisesRegex(ValueError, "requires dataset"):
+                    fill_zero_flux_groups(
+                        mgxs,
+                        macrolib=macrolib,
+                        in_place=True,
+                    )
+
+            self.assertEqual(_sha256(mgxs), digest)
+
+    def test_invalid_nu_source_is_rejected_before_output_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            mgxs = root / "mgxs.h5"
+            output = root / "filled.h5"
+            macrolib = _touch_macrolib(root)
+            spec = _fuel_spec()
+            spec["datasets"]["reduced_absorption"] = (0.8, 1.8, 0.0, 0.0)
+            _write_converter_h5(mgxs, {"fuel": spec})
+            for path in (mgxs, macrolib):
+                _declare_scatter_contract(
+                    path,
+                    mgxs_type="consistent nu-scatter matrix",
+                    multiplicity_weighted=True,
+                    balance_dataset="reduced_absorption",
+                )
+            digest = _sha256(mgxs)
+            library = _fake_library()
+            bad_scatter = library.xsdatas[0].scatter_matrix[0].copy()
+            bad_scatter[0, 0, 0] = np.nan
+            library.xsdatas[0].scatter_matrix[0] = bad_scatter
+            library.xsdatas[0].multiplicity_matrix[0] = np.ones((GROUPS, GROUPS))
+
+            with _fake_openmc(library):
+                with self.assertRaisesRegex(ValueError, "finite"):
+                    fill_zero_flux_groups(
+                        mgxs,
+                        macrolib=macrolib,
+                        output_h5=output,
+                    )
+
+            self.assertEqual(_sha256(mgxs), digest)
+            self.assertFalse(output.exists())
+
     def test_fills_zero_total_bins_with_reversed_macrolib_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

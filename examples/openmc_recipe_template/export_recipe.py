@@ -59,15 +59,34 @@ DOMAIN_VOLUME_BY_ID_CM3: dict[int, float] = {}
 DEFAULT_DOMAIN_VOLUME_CM3: float | None = None
 
 LEGENDRE_ORDER = 1
+
+# Select one physically paired static scattering policy.  The ordinary policy
+# is the general default.  Enable the nu-weighted policy only when multiplicative
+# scattering such as (n,xn) is material to the fast-spectrum calculation.
+# openmc2donjon does not infer this choice from the energy range.
+USE_FAST_SPECTRUM_NU_SCATTER = False
+SCATTER_MGXS_TYPE = (
+    "consistent nu-scatter matrix"
+    if USE_FAST_SPECTRUM_NU_SCATTER
+    else "scatter matrix"
+)
+TRANSPORT_MGXS_TYPE = (
+    "nu-transport" if USE_FAST_SPECTRUM_NU_SCATTER else "transport"
+)
 MGXS_TYPES = [
     "total",
     "absorption",
+    # The nu-weighted policy keeps ordinary absorption as a reaction-rate
+    # observable and adds reduced absorption for balance with
+    # multiplicity-weighted scattering. Keep this paired with consistent
+    # nu-scatter below.
+    *(["reduced absorption"] if USE_FAST_SPECTRUM_NU_SCATTER else []),
     "fission",
     "kappa-fission",
     "nu-fission",
     "chi",
-    "scatter matrix",
-    "transport",
+    SCATTER_MGXS_TYPE,
+    TRANSPORT_MGXS_TYPE,
 ]
 
 
@@ -82,6 +101,10 @@ def build_library():
     library.domains = select_domains(geometry)
     library.by_nuclide = False
     library.legendre_order = LEGENDRE_ORDER
+    # Converter writes raw total XS, so keep the scattering matrix uncorrected.
+    # This also matters when LEGENDRE_ORDER is changed to 0: OpenMC otherwise
+    # defaults to a P0 diagonal transport correction.
+    library.correction = None
 
     library.build_library()
     return library
@@ -107,6 +130,12 @@ def domain_names(library):
         domain.id: stable_domain_name(domain, index)
         for index, domain in enumerate(library.domains, start=1)
     }
+
+
+def scatter_mgxs_type():
+    """Declare which tallied matrix Converter must serialize as scattering."""
+
+    return SCATTER_MGXS_TYPE
 
 
 def domain_specs(library):

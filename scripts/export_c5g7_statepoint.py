@@ -109,14 +109,17 @@ def _build_library(
 ) -> mgxs.Library:
     library = mgxs.Library(geometry)
     library.energy_groups = mgxs.EnergyGroups(C5G7_7G_BOUNDS)
-    # Match the locked C5G7 statepoint/accepted-baseline tally definition.
+    # The C5G7 macroscopic source has unit scattering multiplicity (verified
+    # by exact scatter/nu-scatter tally equality in the saved statepoint), so
+    # the ordinary consistent estimator is the appropriate contract here.
     library.mgxs_types = [
         "total",
         "absorption",
         "fission",
         "nu-fission",
         "chi",
-        "consistent nu-scatter matrix",
+        "consistent scatter matrix",
+        "transport",
     ]
     if domain_mode == "material":
         library.domain_type = "material"
@@ -150,7 +153,7 @@ def _export_library(
             library,
             output,
             root_attrs=root_attrs,
-            scatter_mgxs_type="consistent nu-scatter matrix",
+            scatter_mgxs_type="consistent scatter matrix",
         )
     else:
         export_openmc_mgxs_library(
@@ -163,7 +166,7 @@ def _export_library(
                 "mesh_lower_left": np.asarray((0.0, -SIDE, 0.0), dtype=float),
                 "mesh_upper_right": np.asarray((SIDE, 0.0, 1.0), dtype=float),
             },
-            scatter_mgxs_type="consistent nu-scatter matrix",
+            scatter_mgxs_type="consistent scatter matrix",
         )
     if library.legendre_order > 0:
         _add_p1_transport_total(output)

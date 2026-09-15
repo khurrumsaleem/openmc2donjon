@@ -890,10 +890,14 @@ def register_execution_routes(
                 freeze_groups=request["freeze_groups"],
                 clip_min=request["clip_min"],
                 clip_max=request["clip_max"],
-                require_reference_flux_std_dev=True,
-                max_reference_flux_std_dev_rel=0.20,
-                require_mg_flux_std_dev=True,
-                max_mg_flux_std_dev_rel=0.20,
+                require_reference_flux_std_dev=request[
+                    "require_reference_flux_std_dev"
+                ],
+                max_reference_flux_std_dev_rel=request[
+                    "max_reference_flux_std_dev_rel"
+                ],
+                require_mg_flux_std_dev=request["require_mg_flux_std_dev"],
+                max_mg_flux_std_dev_rel=request["max_mg_flux_std_dev_rel"],
                 force=request["force"],
                 summary_json=summary_path,
             )
@@ -1264,6 +1268,26 @@ def _normalize_sph_sidecar(payload: Any, http_exception: Any) -> dict[str, Any]:
     flux_floor_rel = _optional_number(data.get("flux_floor_rel"), "flux_floor_rel", http_exception)
     clip_min = _optional_number(data.get("clip_min"), "clip_min", http_exception)
     clip_max = _optional_number(data.get("clip_max"), "clip_max", http_exception)
+    require_reference_flux_std_dev = _boolean(
+        data.get("require_reference_flux_std_dev", False),
+        "require_reference_flux_std_dev",
+        http_exception,
+    )
+    max_reference_flux_std_dev_rel = _optional_number(
+        data.get("max_reference_flux_std_dev_rel"),
+        "max_reference_flux_std_dev_rel",
+        http_exception,
+    )
+    require_mg_flux_std_dev = _boolean(
+        data.get("require_mg_flux_std_dev", False),
+        "require_mg_flux_std_dev",
+        http_exception,
+    )
+    max_mg_flux_std_dev_rel = _optional_number(
+        data.get("max_mg_flux_std_dev_rel"),
+        "max_mg_flux_std_dev_rel",
+        http_exception,
+    )
     damping = _number(data.get("damping", 1.0), "damping", http_exception)
     if damping < 0.0 or damping > 1.0:
         raise http_exception(
@@ -1278,6 +1302,15 @@ def _normalize_sph_sidecar(payload: Any, http_exception: Any) -> dict[str, Any]:
                 "increase tally statistics instead"
             ),
         )
+    for key, value in (
+        ("max_reference_flux_std_dev_rel", max_reference_flux_std_dev_rel),
+        ("max_mg_flux_std_dev_rel", max_mg_flux_std_dev_rel),
+    ):
+        if value is not None and value < 0.0:
+            raise http_exception(
+                status_code=422,
+                detail=f"{key} must be non-negative",
+            )
     return {
         "strategy": strategy,
         "input_h5": _required_text(data, "input_h5", http_exception),
@@ -1310,6 +1343,10 @@ def _normalize_sph_sidecar(payload: Any, http_exception: Any) -> dict[str, Any]:
         "freeze_groups": tuple(freeze) if freeze else None,
         "clip_min": clip_min,
         "clip_max": clip_max,
+        "require_reference_flux_std_dev": require_reference_flux_std_dev,
+        "max_reference_flux_std_dev_rel": max_reference_flux_std_dev_rel,
+        "require_mg_flux_std_dev": require_mg_flux_std_dev,
+        "max_mg_flux_std_dev_rel": max_mg_flux_std_dev_rel,
         "force": _boolean(data.get("force", False), "force", http_exception),
     }
 

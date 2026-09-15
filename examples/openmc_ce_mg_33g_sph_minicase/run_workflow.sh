@@ -23,6 +23,7 @@ MG_MACRO_HISTOGRAM_BINS="${MG_MACRO_HISTOGRAM_BINS:-16}"
 MG_MACRO_LEGENDRE_ORDER="${MG_MACRO_LEGENDRE_ORDER:-3}"
 SPH_ITERATIONS="${SPH_ITERATIONS:-1}"
 SPH_DAMPING="${SPH_DAMPING:-1.0}"
+SPH_TARGET="${SPH_TARGET:-flux}"
 SPH_CLIP_MIN="${SPH_CLIP_MIN:-}"
 SPH_CLIP_MAX="${SPH_CLIP_MAX:-}"
 COLORSET_VARIANT="${OPENMC2DONJON_COLORSET_VARIANT:-three_region}"
@@ -60,6 +61,7 @@ echo "run root: $RUN_ROOT"
 echo "colorset variant: $COLORSET_VARIANT"
 echo "SPH iterations: $SPH_ITERATIONS"
 echo "SPH damping: $SPH_DAMPING"
+echo "SPH target: $SPH_TARGET (same-partition diagnostic defaults to flux)"
 if [[ -n "$SPH_CLIP_MIN" || -n "$SPH_CLIP_MAX" ]]; then
   echo "SPH clipping: min=${SPH_CLIP_MIN:-none} max=${SPH_CLIP_MAX:-none}"
 fi
@@ -192,6 +194,7 @@ for ((ITER=1; ITER<=SPH_ITERATIONS; ITER++)); do
     --reference-flux "$CE_FLUX::openmc_volume_flux"
     --mg-flux "$ITER_MG_FLUX::openmc_mg_flux"
     --table-output "$ITER_SPH_TABLE"
+    --sph-target "$SPH_TARGET"
     --damping "$SPH_DAMPING"
     --flux-normalization auto
     --require-reference-flux-std-dev

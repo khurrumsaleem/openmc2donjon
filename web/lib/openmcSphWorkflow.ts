@@ -32,10 +32,10 @@ const MG_EXPORT_HREF =
 export const OPENMC_SPH_WORKFLOW_STEPS: readonly OpenmcSphWorkflowStep[] = [
   {
     id: "ce-flux",
-    title: "Export CE reference flux",
+    title: "Export heterogeneous CE reference",
     badge: "CE",
     body:
-      "Run the fine continuous-energy OpenMC reference model and export one region/group flux vector for every equivalence domain declared by the project.",
+      "Run the heterogeneous fine-geometry continuous-energy OpenMC reference and export one region/group flux vector for every declared fine-to-coarse equivalence domain. Its native tally IDs may differ from the MG geometry; map CE IDs in canonical mixture_names order, or omit them only when this file's --mgxs source_domain_id metadata is correct.",
     commandId: "export-volume-flux",
     href: CE_EXPORT_HREF,
     cli:
@@ -45,10 +45,10 @@ export const OPENMC_SPH_WORKFLOW_STEPS: readonly OpenmcSphWorkflowStep[] = [
   },
   {
     id: "mg-flux",
-    title: "Export MG macro flux",
+    title: "Export homogenized coarse MG flux",
     badge: "MG",
     body:
-      "Run the homogenized OpenMC MG model on the same boundary, selected energy mesh, and stable project-declared domain order, then export matching region/group flux with uncertainty.",
+      "Run the homogenized coarse-geometry OpenMC MG model. Its geometry intentionally differs from the CE reference; match the CE tally bins to the MG transport group boundaries, then align physical state, boundary conditions, and the declared fine-to-coarse domain mapping. Map this geometry's own native tally IDs in canonical mixture_names order; they need not equal the CE IDs.",
     commandId: "export-volume-flux",
     href: MG_EXPORT_HREF,
     cli:
@@ -61,7 +61,7 @@ export const OPENMC_SPH_WORKFLOW_STEPS: readonly OpenmcSphWorkflowStep[] = [
     title: "Compute SPH factors",
     badge: "SPH",
     body:
-      "Compute the domain-wise rate-preserving CE/MG update, apply it to the homogenized MG model, re-run MG, and repeat with the previous sidecar until the raw update residual converges. No k-effective fitting is allowed.",
+      "Declare independent CE and MG maximum relative std-dev limits, compute the domain-wise rate-preserving CE/MG update, apply it to the homogenized MG model, re-run MG, and repeat with the previous sidecar until the raw update residual converges. No k-effective fitting is allowed.",
     commandId: "make-openmc-sph-sidecar",
     href: "/equivalence?kind=openmc-sph-sidecar&contract=physical-sph",
     cli:
@@ -69,14 +69,17 @@ export const OPENMC_SPH_WORKFLOW_STEPS: readonly OpenmcSphWorkflowStep[] = [
       "--reference-flux openmc_ce_flux.h5::openmc_volume_flux " +
       "--mg-flux openmc_mg_flux.h5::openmc_mg_flux " +
       "--table-output openmc_sph.csv --flux-normalization auto " +
-      "--sph-target rate",
+      "--sph-target rate --require-reference-flux-std-dev " +
+      "--max-reference-flux-std-dev-rel <CE_MAX_REL_STD_DEV> " +
+      "--require-mg-flux-std-dev " +
+      "--max-mg-flux-std-dev-rel <MG_MAX_REL_STD_DEV>",
   },
   {
     id: "apply-sph",
-    title: "Apply SPH to the Converter handoff",
+    title: "Write the corrected HDF5",
     badge: "XS",
     body:
-      "After convergence and independent validation, write a converter-layout MGXS copy with macroscopic cross sections divided by the physical NSPH factors. Preserve the manifest-declared domain identity and ordering.",
+      "After convergence and independent validation, write a corrected converter-layout MGXS HDF5 with macroscopic cross sections divided by the physical NSPH factors. Preserve the manifest-declared domain identity and ordering.",
     commandId: "apply-sph",
     href: "/equivalence?kind=apply-sph",
     cli:
@@ -85,15 +88,15 @@ export const OPENMC_SPH_WORKFLOW_STEPS: readonly OpenmcSphWorkflowStep[] = [
   },
   {
     id: "convert",
-    title: "Convert for DONJON",
+    title: "Enter the formal Converter handoff",
     badge: "ASCII",
     body:
-      "Run Converter on the completed handoff and write the checked DONJON object selected by the project. The manifest decides whether other components are required.",
+      "Only after the corrected HDF5 exists, enter Converter as the formal handoff boundary and write the checked DONJON object selected by the project. The manifest decides whether other components are required.",
     commandId: "direct-convert",
-    href: "/convert?intent=openmc-sph&input=mgxs_sph_applied.h5&format=multicompo&check=1&production=1",
+    href: "/convert?intent=openmc-sph&input=mgxs_sph_applied.h5&format=multicompo&check=1&production=1&contract=physical-sph",
     cli:
       "openmc2donjon mgxs_sph_applied.h5 -o out.mcompo.txt " +
-      "--format multicompo --check --production",
+      "--format multicompo --check --production --require-physical-sph",
   },
 ] as const;
 

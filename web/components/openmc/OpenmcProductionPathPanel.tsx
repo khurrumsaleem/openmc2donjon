@@ -9,12 +9,9 @@ import type {
   OpenmcWorkflowPlan,
 } from "@/lib/api";
 import type { OpenmcSphDemoPreset } from "@/lib/openmcSphDemo";
+import { openmcSphEvidenceHref } from "@/lib/openmcSphDemo";
 import {
-  openmcSphBundleHref,
-  openmcSphConvertHref,
-  openmcSphEvidenceHref,
-} from "@/lib/openmcSphDemo";
-import {
+  OPENMC_SPH_APPLY_FORM_HREF,
   openmcDirectConvertHref,
   OPENMC_SPH_SIDECAR_FORM_HREF,
   openmcWalkthroughStatuses,
@@ -94,7 +91,7 @@ export default function OpenmcProductionPathPanel({
   const plannedAsciiPath =
     plan?.artifacts.find((artifact) => artifact.kind === "ascii")?.path ?? "";
   const convertHref =
-    planned && plan && provenanceVerified && !isSphExport && actualHdf5Path
+    planned && plan && provenanceVerified && !isOpenmcSph && actualHdf5Path
       ? openmcDirectConvertHref(
           actualHdf5Path,
           plannedAsciiPath,
@@ -103,9 +100,6 @@ export default function OpenmcProductionPathPanel({
           projectContext,
         )
       : null;
-  // A plan and even an HDF5 export do not prove that Converter has written an
-  // ASCII object or receipt, so this panel must never enable Bundle directly.
-  const bundleHref: string | null = null;
   const exportStatus: OpenmcWalkthroughStatus =
     exportState.kind === "loading"
       ? "planning"
@@ -130,7 +124,6 @@ export default function OpenmcProductionPathPanel({
     bundle: "needed" as OpenmcWalkthroughStatus,
   };
   const sphDemo = isOpenmcSph && demo ? demo : null;
-  const demoBundleHref = sphDemo ? openmcSphBundleHref(sphDemo.preset) : null;
   const items = isSphExport
     ? [
         {
@@ -163,7 +156,7 @@ export default function OpenmcProductionPathPanel({
           eyebrow: "Next page",
           title: "Build and apply SPH",
           body:
-            "Use paired CE-reference and homogenized-MG fluxes in the same declared domain order. Converter comes after apply-sph, not directly after export.",
+            "Use a heterogeneous fine CE reference and a homogenized coarse MG model. Score CE tallies on the MG group boundaries and align state, BC, and domain mapping. Converter comes after apply-sph, not directly after export.",
           status: statuses.review,
           href: OPENMC_SPH_SIDECAR_FORM_HREF,
           hrefLabel: "Continue to SPH",
@@ -178,7 +171,7 @@ export default function OpenmcProductionPathPanel({
           eyebrow: "Run physics",
           title: "Run OpenMC CE/MG SPH",
           body:
-            "Run the fine-reference and homogenized-MG OpenMC models on the same boundary and declared domains. Export matched CE/MG fluxes, converge SPH(domain, group), and pre-apply NSPH to the handoff.",
+            "Run the heterogeneous fine-reference and homogenized coarse-MG OpenMC models on intentionally different geometries. Score CE tallies on the MG group boundaries and align state, boundary conditions, and fine-to-coarse domain mapping; converge SPH(domain, group), then apply NSPH to write the corrected HDF5.",
           status: statuses.run,
           href: undefined,
           hrefLabel: undefined,
@@ -188,7 +181,7 @@ export default function OpenmcProductionPathPanel({
           id: "summary",
           label: "02",
           eyebrow: "Review evidence",
-          title: "Review production evidence",
+          title: "Review SPH evidence",
           body:
             "Load physics_summary.json and check CE/MG flux uncertainty, SPH factor range, reaction-rate preservation, and NSPH handoff status.",
           status: statuses.run,
@@ -197,24 +190,15 @@ export default function OpenmcProductionPathPanel({
           onClick: sphDemo?.onReview,
         },
         {
-          id: "convert",
+          id: "apply",
           label: "03",
-          eyebrow: "Converter",
-          title: `Convert to DONJON ${objectShort}`,
+          eyebrow: "Corrected handoff",
+          title: "Apply SPH before Converter",
           body:
-            format === "macrolib"
-              ? `Use the pre-applied HDF5 as Converter input and write ${object}.`
-              : `Use the pre-applied HDF5 as Converter input and write ${object}. The project manifest defines which domain or state the downstream consumer imports.`,
+            `Run apply-sph to write the corrected HDF5. Only then enter Converter to write ${object}; Converter is the formal handoff boundary, not part of the SPH iteration.`,
           status: statuses.review,
-          href:
-            convertHref ??
-            (sphDemo ? openmcSphConvertHref(sphDemo.preset) : inspectHref) ??
-            undefined,
-          hrefLabel: convertHref
-            ? "Open Converter"
-            : sphDemo
-              ? "Open Converter (demo prefill)"
-              : "Inspect HDF5",
+          href: OPENMC_SPH_APPLY_FORM_HREF,
+          hrefLabel: "Open apply-sph",
           onClick: undefined,
         },
       ]
@@ -251,7 +235,7 @@ export default function OpenmcProductionPathPanel({
           body:
             "Use a managed run directory to keep the MGXS input, ASCII output, summaries, and manifest together.",
           status: statuses.bundle,
-          href: bundleHref ?? undefined,
+          href: undefined,
           hrefLabel: "Open bundle builder",
           onClick: undefined,
         },
@@ -275,7 +259,7 @@ export default function OpenmcProductionPathPanel({
             {isSphExport
               ? "This step ends at the MGXS HDF5. Inspect it, then build and apply SPH on the next page; Converter remains the single gateway that validates and writes DONJON ASCII."
               : isOpenmcSph
-              ? "This route prepares one Converter input from matched fine-reference and homogenized-MG domains. Converter writes one checked object; the project manifest decides how many other objects and which consumer are required."
+              ? "This route prepares one corrected Converter input from a heterogeneous fine reference and homogenized coarse model. Converter begins only after apply-sph; the project manifest decides how many other objects and which consumer are required."
               : "This route prepares the MGXS HDF5 from OpenMC inputs. Converter is enabled only after a real write and a fail-closed provenance check; a successful plan alone is not an artifact."}
           </p>
           {demo ? (
@@ -288,7 +272,9 @@ export default function OpenmcProductionPathPanel({
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-3">
           <span className="rounded border border-[var(--edge)] px-2 py-1 font-mono text-[11px] uppercase tracking-wider text-[var(--fg-2)]">
-            OpenMC HDF5 → Converter · {equivalenceLabel(equivalence)}
+            {isOpenmcSph || isSphExport
+              ? "CE fine + MG coarse → SPH → corrected HDF5 → Converter"
+              : `OpenMC HDF5 → Converter · ${equivalenceLabel(equivalence)}`}
           </span>
           {demo ? (
             <>
@@ -354,7 +340,7 @@ export default function OpenmcProductionPathPanel({
         </div>
       ) : null}
 
-      {(planned && plan) || demoBundleHref ? (
+      {planned && plan ? (
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {planned && plan ? (
             <CopyCliButton
@@ -371,16 +357,6 @@ export default function OpenmcProductionPathPanel({
           {inspectHref ? (
             <Link href={inspectHref} className="btn btn-secondary">
               Inspect HDF5
-            </Link>
-          ) : null}
-          {bundleHref ? (
-            <Link href={bundleHref} className="btn btn-secondary">
-              Bundle
-            </Link>
-          ) : null}
-          {demoBundleHref ? (
-            <Link href={demoBundleHref} className="btn btn-secondary">
-              Bundle (demo prefill)
             </Link>
           ) : null}
         </div>

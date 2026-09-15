@@ -22,7 +22,7 @@ describe("commandWorkflowLanes", () => {
     expect(ids).toContain("validate-bundle");
     const direct = COMMAND_WORKFLOW_LANES.find((lane) => lane.id === "direct");
     const convert = direct!.steps.find((step) => step.id === "convert");
-    expect(convert!.body).toContain("SPH only when the project requires it");
+    expect(convert!.body).toContain("after any required upstream SPH correction");
   });
 
   it("shows the OpenMC-side SPH route as CE flux, MG flux, sidecar, apply, convert", () => {
@@ -37,12 +37,18 @@ describe("commandWorkflowLanes", () => {
       "convert",
     ]);
     expect(sphLane!.steps[0].body).toContain("continuous-energy OpenMC");
-    expect(sphLane!.steps[1].body).toContain("selected energy mesh");
+    expect(sphLane!.steps[1].body).toContain("CE tally bins");
+    expect(sphLane!.steps[1].body).toContain("MG transport group boundaries");
     expect(sphLane!.steps[4].href).toContain("format=multicompo");
     expect(sphLane!.steps[2].commandIds).toContain("make-openmc-sph-sidecar");
     expect(sphLane!.steps[2].commandIds).toContain("make-sph-update-table");
     expect(sphLane!.steps[3].commandIds).toContain("apply-sph");
-    expect(sphLane!.summary).toContain("apply them to the handoff cross sections");
+    expect(sphLane!.summary).toContain("intentionally different geometries");
+    expect(sphLane!.summary).toContain("group definitions/tally bins");
+    expect(sphLane!.summary).toContain("physical state");
+    expect(sphLane!.summary).toContain("boundary conditions");
+    expect(sphLane!.summary).toContain("fine-to-coarse domain mapping");
+    expect(sphLane!.summary).toContain("write the corrected HDF5");
     expect(sphLane!.steps[3].body).toContain("divided by the physical NSPH factors");
   });
 

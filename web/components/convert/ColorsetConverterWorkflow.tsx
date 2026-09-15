@@ -12,6 +12,7 @@ import {
   projectComponentConvertHref,
   projectComponentEquivalenceHref,
   projectComponentPrepareHref,
+  projectComponentStartHref,
   projectConsumerHref,
   projectEquivalenceActionLabel,
   projectRootFromSearchParams,
@@ -41,7 +42,7 @@ export default function ColorsetConverterWorkflow() {
       if (isWithdrawnDiagnosticProject(data)) {
         router.replace(withdrawnProjectViewHref(projectRoot, nextId), { scroll: false });
       } else if (!requestedId && data.components[0]) {
-        router.replace(projectComponentConvertHref(projectRoot, data.components[0]), { scroll: false });
+        router.replace(projectComponentStartHref(projectRoot, data.components[0]), { scroll: false });
       }
     }).catch(() => !cancelled && setProjectStatus(null));
     return () => { cancelled = true; };
@@ -58,7 +59,7 @@ export default function ColorsetConverterWorkflow() {
     router.replace(
       projectStatus && isWithdrawnDiagnosticProject(projectStatus)
         ? withdrawnProjectViewHref(projectRoot, component.id)
-        : projectComponentConvertHref(projectRoot, component),
+        : projectComponentStartHref(projectRoot, component),
       { scroll: false },
     );
   }
@@ -72,6 +73,8 @@ export default function ColorsetConverterWorkflow() {
   const withdrawnProject = isWithdrawnDiagnosticProject(projectStatus);
   const withdrawnSelected =
     withdrawnProject || isIrenaColorsetSphContract(selected.contract);
+  const recommendedPhysical = selected.contract === "physical-sph";
+  const correctedHandoffReady = selected.handoff.state === "accepted";
   return (
     <section data-testid="project-converter-workflow" className="mb-6 overflow-hidden rounded-2xl border border-emerald-200/30 bg-[var(--surface)] shadow-[var(--shadow-sm)]">
       <div className="flex flex-col gap-4 border-b border-[var(--edge)] bg-emerald-300/[0.045] p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
@@ -131,21 +134,44 @@ export default function ColorsetConverterWorkflow() {
           <p className="mt-3 text-[11px] leading-5 text-[var(--fg-3)]">
             {withdrawnProject
               ? "These artifact paths and declared contracts are historical metadata only. The project-level withdrawal overrides every component action."
-              : "OpenMC MGXS preparation is optional. If the declared HDF5 already exists, start with Converter; physical SPH remains a separate coarse-model step."}
+              : recommendedPhysical
+                ? "Recommended route: prepare the heterogeneous CE and homogenized coarse-MG inputs, converge and apply rate-preserving SPH, then enter Converter with the corrected HDF5."
+                : selected.contract === "native-sph"
+                  ? "Advanced project-specific route: this explicit native-SPH contract creates a Converter reference before the DRAGON fixed-point solve."
+                  : "If the declared HDF5 is already Converter-ready, including any required upstream correction, start with Converter."}
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {withdrawnProject ? (
               <Link href={projectConsumerHref(projectRoot, projectStatus.consumer)} className="btn btn-secondary">
                 Review archived diagnostic →
               </Link>
-            ) : <><Link href={projectComponentPrepareHref(projectRoot, selected)} className="btn btn-secondary">
-              {withdrawnSelected ? "Review archived MGXS path" : "Prepare MGXS (optional)"}
-            </Link>
-            <Link href={projectComponentConvertHref(projectRoot, selected)} className={withdrawnSelected ? "btn btn-secondary" : "btn btn-primary"}>
-              {withdrawnSelected ? "Review withdrawn Converter route" : "Run Converter"}
-            </Link>
-            {isPhysicalSphContract(selected.contract) ? <Link href={projectComponentEquivalenceHref(projectRoot, selected)} className="btn btn-secondary">{withdrawnSelected ? "Review archived SPH evidence" : projectEquivalenceActionLabel(selected.contract)}</Link> : null}
-            </>}
+            ) : (
+              <>
+                {!recommendedPhysical ||
+                selected.handoff.state === "rejected" ||
+                correctedHandoffReady ? (
+                  <Link href={projectComponentPrepareHref(projectRoot, selected)} className="btn btn-secondary">
+                    {recommendedPhysical ? "Prepare CE/MG inputs" : withdrawnSelected ? "Review archived MGXS path" : "Prepare MGXS (optional)"}
+                  </Link>
+                ) : null}
+                {recommendedPhysical && !correctedHandoffReady ? (
+                  <Link href={projectComponentStartHref(projectRoot, selected)} className="btn btn-primary">
+                    {selected.handoff.state === "rejected"
+                      ? "Complete recommended CE/MG SPH"
+                      : "Prepare recommended CE/MG SPH"}
+                  </Link>
+                ) : (
+                  <Link href={projectComponentConvertHref(projectRoot, selected)} className={withdrawnSelected ? "btn btn-secondary" : "btn btn-primary"}>
+                    {withdrawnSelected ? "Review withdrawn Converter route" : "Run Converter"}
+                  </Link>
+                )}
+                {isPhysicalSphContract(selected.contract) && (!recommendedPhysical || correctedHandoffReady) ? (
+                  <Link href={projectComponentEquivalenceHref(projectRoot, selected)} className="btn btn-secondary">
+                    {withdrawnSelected ? "Review archived SPH evidence" : recommendedPhysical ? "Review CE/MG SPH" : projectEquivalenceActionLabel(selected.contract)}
+                  </Link>
+                ) : null}
+              </>
+            )}
           </div>
         </article>
       </div>

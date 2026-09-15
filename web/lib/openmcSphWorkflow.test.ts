@@ -25,6 +25,15 @@ describe("openmcSphWorkflow", () => {
     expect(ce?.cli).toContain("--tally-name openmc_ce_volume_flux");
     expect(mg?.href).toContain("dataset_name=openmc_mg_flux");
     expect(mg?.cli).toContain("--tally-name openmc_mg_volume_flux");
+    expect(ce?.body).toContain("heterogeneous fine-geometry");
+    expect(mg?.body).toContain("geometry intentionally differs");
+    expect(mg?.body).toContain("CE tally bins");
+    expect(mg?.body).toContain("MG transport group boundaries");
+    expect(mg?.body).toContain("physical state");
+    expect(mg?.body).toContain("boundary conditions");
+    expect(mg?.body).toContain("fine-to-coarse domain mapping");
+    expect(ce?.body).toContain("native tally IDs may differ");
+    expect(mg?.body).toContain("they need not equal the CE IDs");
   });
 
   it("keeps the example flux exports strict (no zero-flux relaxation)", () => {
@@ -68,6 +77,12 @@ describe("openmcSphWorkflow", () => {
     expect(apply?.badge).toBe("XS");
     expect(apply?.href).toBe("/equivalence?kind=apply-sph");
     expect(apply?.body).toContain("divided by the physical NSPH factors");
+    expect(apply?.body).toContain("corrected converter-layout MGXS HDF5");
+    const convert = OPENMC_SPH_WORKFLOW_STEPS.find((step) => step.id === "convert");
+    expect(convert?.body).toContain("Only after the corrected HDF5 exists");
+    expect(convert?.body).toContain("formal handoff boundary");
+    expect(convert?.href).toContain("contract=physical-sph");
+    expect(convert?.cli).toContain("--require-physical-sph");
   });
 
   it("documents a rate-preserving iterative update without k fitting", () => {
@@ -75,6 +90,16 @@ describe("openmcSphWorkflow", () => {
 
     expect(sph?.body).toContain("repeat with the previous sidecar");
     expect(sph?.body).toContain("No k-effective fitting");
+    expect(sph?.body).toContain("independent CE and MG maximum relative std-dev limits");
     expect(sph?.cli).toContain("--sph-target rate");
+    expect(sph?.cli).toContain("--require-reference-flux-std-dev");
+    expect(sph?.cli).toContain(
+      "--max-reference-flux-std-dev-rel <CE_MAX_REL_STD_DEV>",
+    );
+    expect(sph?.cli).toContain("--require-mg-flux-std-dev");
+    expect(sph?.cli).toContain(
+      "--max-mg-flux-std-dev-rel <MG_MAX_REL_STD_DEV>",
+    );
+    expect(sph?.cli).not.toContain("0.20");
   });
 });

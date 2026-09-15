@@ -88,7 +88,7 @@
     "demonstration_quality": true,
     "max_flux_relative_std_dev": 0.03968350468875259,
     "notes": [
-      "SPH handoff structure and flux uncertainty meet the production-quality threshold."
+      "Diagnostic SPH handoff structure and flux uncertainty meet the historical high-statistics threshold; this is not physical-SPH acceptance."
     ],
     "production_flux_relative_std_dev_threshold": 0.05,
     "production_ready": true,
@@ -215,7 +215,7 @@
     },
     "reference": "CE-tallied MGXS * CE volume flux"
   },
-  "route": "OpenMC CE reference + OpenMC MG same geometry -> OpenMC-side SPH",
+  "route": "Diagnostic OpenMC CE/MG same-partition flux comparison",
   "schema": "openmc2donjon.openmc-ce-mg-sph-physics-summary.v1",
   "sph": {
     "applied_to_xs": false,

@@ -276,6 +276,18 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(effective[name], maximum)
         preflight = payload["preflight"]["inputs"][0]
         self.assertEqual(
+            payload["scatter_contract"],
+            {
+                "openmc_scatter_mgxs_type": "scatter matrix",
+                "openmc_scatter_multiplicity_weighted": False,
+                "openmc_scatter_balance_dataset": "absorption",
+                "openmc_scatter_contract_declared": True,
+                "openmc_scatter_contract_valid": True,
+                "openmc_transport_mgxs_type": "transport",
+                "openmc_transport_contract_declared": False,
+            },
+        )
+        self.assertEqual(
             preflight["scatter_row_balance"]["fail_threshold"],
             PRODUCTION_CANONICAL_MAXIMUMS["scatter_row_balance_fail"],
         )
@@ -316,6 +328,67 @@ class CliTests(unittest.TestCase):
         preflight = payload["preflight"]["inputs"][0]
         self.assertEqual(preflight["scatter_row_balance"]["fail_threshold"], 99.0)
         self.assertFalse(preflight["uncertainty"]["checked"])
+
+    def test_direct_production_receipt_preserves_nu_scatter_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "mgxs.h5"
+            output = Path(tmpdir) / "out.macrolib.txt"
+            receipt = Path(tmpdir) / "convert.json"
+            write_production_ready_mgxs(path)
+            with h5py.File(path, "a") as h5:
+                fuel = h5["mixtures/fuel"]
+                for attrs in (h5.attrs, fuel.attrs):
+                    attrs["openmc_scatter_mgxs_type"] = (
+                        "consistent nu-scatter matrix"
+                    )
+                    attrs["openmc_scatter_multiplicity_weighted"] = True
+                    attrs["openmc_scatter_balance_dataset"] = (
+                        "reduced_absorption"
+                    )
+                    attrs["openmc_transport_mgxs_type"] = "nu-transport"
+                reduced = fuel.create_dataset(
+                    "reduced_absorption",
+                    data=fuel["total"][:] - fuel["scatter_matrix"][0].sum(axis=1),
+                )
+                fuel.create_dataset(
+                    "reduced_absorption_std_dev",
+                    data=np.zeros_like(reduced[:]),
+                )
+
+            rc = cli_main(
+                [
+                    str(path),
+                    "-o",
+                    str(output),
+                    "--format",
+                    "macrolib",
+                    "--production",
+                    "--summary-json",
+                    str(receipt),
+                ]
+            )
+            payload = json.loads(receipt.read_text(encoding="utf-8"))
+
+        expected = {
+            "openmc_scatter_mgxs_type": "consistent nu-scatter matrix",
+            "openmc_scatter_multiplicity_weighted": True,
+            "openmc_scatter_balance_dataset": "reduced_absorption",
+            "openmc_scatter_contract_declared": True,
+            "openmc_scatter_contract_valid": True,
+            "openmc_transport_mgxs_type": "nu-transport",
+            "openmc_transport_contract_declared": True,
+        }
+        self.assertEqual(rc, 0)
+        self.assertEqual(payload["scatter_contract"], expected)
+        preflight_input = payload["preflight"]["inputs"][0]
+        self.assertEqual(
+            {key: preflight_input[key] for key in expected},
+            expected,
+        )
+        self.assertLessEqual(
+            preflight_input["scatter_row_balance"]["max_rel"],
+            1.0e-12,
+        )
 
     def test_check_command_can_gate_energy_group_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -936,7 +1009,13 @@ def write_valid_mgxs(path: Path) -> None:
 def write_production_ready_mgxs(path: Path) -> None:
     write_valid_mgxs(path)
     with h5py.File(path, "a") as h5:
+        h5.attrs["openmc_scatter_mgxs_type"] = "scatter matrix"
+        h5.attrs["openmc_scatter_multiplicity_weighted"] = False
+        h5.attrs["openmc_scatter_balance_dataset"] = "absorption"
         fuel = h5["mixtures/fuel"]
+        fuel.attrs["openmc_scatter_mgxs_type"] = "scatter matrix"
+        fuel.attrs["openmc_scatter_multiplicity_weighted"] = False
+        fuel.attrs["openmc_scatter_balance_dataset"] = "absorption"
         fuel.create_dataset(
             "kappa_fission",
             data=np.array([3.2e-12, 3.1e-12]),

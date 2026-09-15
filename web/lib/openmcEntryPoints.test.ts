@@ -40,7 +40,14 @@ describe("openmcEntryPoints", () => {
 
   it("keeps the SPH entry generic about geometry and component count", () => {
     const sph = openmcEntryPoint("openmc-sph");
-    expect(sph.body).toContain("project-declared domains");
+    expect(sph.body).toContain("fine-geometry");
+    expect(sph.body).toContain("coarse-geometry");
+    expect(sph.body).toContain("CE tally bins");
+    expect(sph.body).toContain("MG transport group boundaries");
+    expect(sph.body).toContain("physical state");
+    expect(sph.body).toContain("boundary conditions");
+    expect(sph.body).toContain("fine-to-coarse domain mapping");
+    expect(sph.body).toContain("corrected HDF5 to Converter");
     expect(sph.body).not.toMatch(/seven|colorset|five|91-position/i);
   });
 
