@@ -345,6 +345,10 @@ Useful references:
 - [Production minicase](examples/production_minicase/)
 - [Full-core minicase](examples/openmc_full_core_minicase/)
 - [Hex minicase](examples/openmc_hex_minicase/)
+- [Native hexagonal face-current diagnostic](examples/openmc_hex_currents/):
+  experimental Python support for per-position/per-layer incoming, outgoing and
+  net currents on explicit transmission faces, with paired-batch uncertainty.
+  This is a separate optional diagnostic, not an MGXS/SPH or DONJON object.
 
 ## Spatial Domain Rule
 

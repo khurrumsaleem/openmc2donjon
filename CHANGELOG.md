@@ -11,6 +11,11 @@ machine-readable index; cross-reference the release notes for context.
 
 ## [Unreleased]
 
+- Added an experimental native OpenMC hexagonal face-current Python helper,
+  provenance-checked HDF5 export, and a runnable verification example. It scores
+  incoming/outgoing/net currents on explicit per-position/per-layer transmission
+  faces and retains paired-batch covariance for net-current uncertainty. This is
+  an optional diagnostic, not a new MGXS, SPH, or DONJON acceptance result.
 - Extended `fill-zero-flux` with opt-in total-XS uncertainty and P0
   scatter-row overshoot criteria for solver-destabilizing micro-flux bins;
   repeated fills now retain the union of substituted-group provenance, and

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added opt-in native OpenMC hexagonal face-current diagnostics without a custom
+  HexMesh extension. Explicit unique cell domains preserve nested fine fills;
+  surface/cell filters localize the six side faces and two axial faces. The first
+  implementation supports transmission faces only and rejects unsupported domain
+  placement. Hash-bound exports preserve incoming/outgoing covariance when all
+  active-batch statepoints are available; final-only exports omit net uncertainty.
+  The public [verification example](examples/openmc_hex_currents/) tests directed
+  crossings and anticorrelated partial currents in void geometry. These are
+  geometry/statistics checks, not reactor-physics or production acceptance.
 - Restored the standard physical-SPH workflow: heterogeneous OpenMC CE
   reference -> homogenized OpenMC MG rate-preserving iteration -> corrected
   HDF5 -> Converter -> downstream DONJON verification. Explicit conservative
