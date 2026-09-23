@@ -11,6 +11,42 @@ machine-readable index; cross-reference the release notes for context.
 
 ## [Unreleased]
 
+- Fixed SPH scattering-axis resolution to share Converter's inherited/alias
+  and unambiguous-shape rules while preserving the stored layout. Legacy
+  sidecars without an input hash are now reported as unbound, not verified;
+  malformed or mismatched hashes still fail, and physical acceptance is unchanged.
+  The web response and result card now retain binding and input-format evidence;
+  unbound, native MG iteration, incomplete, and mock results cannot offer the
+  final Converter handoff link.
+- Made SPH application metadata-aware and failure-safe in Converter and native
+  OpenMC-MG layouts, retaining substitution records and uncertainty annotations
+  without exposing partially scaled outputs. Component collapse now handles
+  explicitly declared nonfission structural zeros without discarding the
+  fuel's fission/nu-fission/chi uncertainty; genuine missing statistics still fail.
+- Validate flux group/domain labels before both collapse paths, share Converter's
+  heat-factor and inverse-velocity aliases, and reject conflicting aliases or
+  partially supplied component vectors instead of losing fields. Collapse now
+  maps and unions zero-flux substitution indices and preserves per-origin donor
+  records through repeated transformations, with explicit contribution semantics.
+- Made both collapse paths failure-safe: stage the HDF5, verify and refresh
+  existing OpenMC provenance, retain a hash-bound processing history, then
+  publish. SPH-bearing/applied and ADF-bearing inputs are explicitly rejected
+  rather than silently losing model-specific equivalence. Energy collapse now
+  retains vector-XS and chi uncertainties with declared propagation limits.
+- Fixed component and energy collapse for moment-last scattering matrices,
+  including ambiguous-sized 4-group/P3 inputs with explicit axes. Both paths
+  now share Converter's layout rules, normalize means and matching standard
+  deviations, and write canonical axis metadata. Invalid layouts or padded
+  moments are rejected before opening the destination. Energy collapse retains
+  available scattering uncertainty as a fixed-flux-weight conservative L1 bound.
+- Added opt-in per-cell Legendre orders for native OpenMC MGXS (for example,
+  P3 in selected lead regions and P1 elsewhere), exact grouped tally preparation,
+  explicit truncation metadata, and a mixed-order OpenMC/DONJON transfer example.
+  Preflight and readers reject inconsistent source-order declarations; component
+  collapse preserves the contributing orders and combined fissionability.
+  Mixed-order zero-flux filling now preserves the target's local truncation;
+  component collapse retains unknown legacy orders instead of inferring them
+  from the stored maximum.
 - Added an experimental native OpenMC hexagonal face-current Python helper,
   provenance-checked HDF5 export, and a runnable verification example. It scores
   incoming/outgoing/net currents on explicit per-position/per-layer transmission

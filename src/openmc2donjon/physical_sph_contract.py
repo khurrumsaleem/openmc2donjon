@@ -394,7 +394,8 @@ def _validate_provenance_bindings(
     ):
         issues.append(
             "sph_apply_binding_mode must be converter-final-exact-input; "
-            "OpenMC-native setN applications are intermediate artifacts"
+            "unbound Converter applications and OpenMC-native setN iteration "
+            "artifacts are not verified final handoffs"
         )
     if _boolean_attr(
         attrs.get("sph_apply_sidecar_input_hash_verified")

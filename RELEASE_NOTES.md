@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+- Fixed SPH application on inherited or aliased scattering layouts, including
+  equal group/moment counts such as four-group P3. Means and uncertainties are
+  divided along the incoming-group axis without changing their storage layout.
+  Ambiguous undeclared layouts fail safely. Missing input hashes no longer
+  produce a false verified-binding receipt: legacy numerical use remains
+  available as `converter-unbound`, while the strict physical-SPH gate still
+  requires an exact bound input and all other existing evidence.
+  Web results distinguish verified-input Converter candidates from unbound
+  numerical outputs and native OpenMC MG iteration files. Only verified-input
+  candidates offer a link to Converter's physical checks; neither binding nor
+  successful file generation is presented as physical acceptance. Older or
+  inconsistent API responses and mock results remain explicitly unverified.
+- Fixed the collapse-to-SPH integration: scalar donor-provenance records are
+  retained rather than read as numeric cross sections. Both SPH application
+  layouts now stage writes and provenance refresh before publishing, protecting
+  existing outputs and the input/sidecar from aliasing and partial failures.
+  Structural nonfission zeros are distinguished from missing Monte Carlo
+  statistics in component uncertainty propagation, including chi; exemptions
+  are narrowly checked and annotated. Strict physical-SPH acceptance still
+  rejects macrolib-substituted contributions.
+- Hardened collapse input semantics: mislabeled reference flux cannot become a
+  seemingly valid output; accepted heat-factor/inverse-velocity aliases and
+  their uncertainties survive both paths. Conflicting aliases and incomplete
+  component vector coverage fail explicitly. Zero-flux donor records now follow
+  all spatial contributors and energy mappings, including repeated collapse.
+  Derived records identify bins containing substituted contributions, not bins
+  wholly replaced by one donor. Further donor replacement must precede collapse;
+  these records do not confer physical SPH acceptance.
+- Restricted component/energy collapse to pre-equivalence inputs: do not average
+  or discard SPH factors, or reuse SPH-corrected data on a changed model. Collapse
+  the uncorrected reference first and recompute equivalence for the new model;
+  use the original HDF5 directly when no change is needed. ADF-bearing input is
+  rejected for the same reason. Failed writes and provenance refreshes preserve
+  existing outputs. A verified source binding is refreshed over the final data
+  and a cumulative input-hash/mapping history; corrupt bindings are not repaired.
+  Energy collapse preserves available vector-XS and chi standard deviations,
+  distinguishing fixed-flux-weight L1 bounds from first-order normalized-chi
+  propagation. Neither substitutes for full tally covariance or physics acceptance.
+- Corrected a storage-layout-dependent collapse error: legal moment-last input
+  could silently weight the wrong scattering axis when the group and moment
+  counts coincided. Component and energy collapse now normalize with the same
+  rules as Converter, preserve local truncation, and emit matching canonical
+  axis labels. Regression tests compare every moment and scattering uncertainty
+  against independent rate-weighted references, including mixed layouts,
+  4-group/P3 and 2-group/P1 cubes, inherited axes, and legacy 2D P0. Ambiguous or
+  malformed scattering input fails before an existing destination can be overwritten.
+- Added [mixed native P1/P3 preparation](examples/openmc_mixed_order/) for
+  explicit cell domains. Only selected regions score high moments. Converter
+  retains a common maximum storage dimension and records each region's native
+  order and zero-truncation policy; the check log no longer leaves the maximum
+  order unexplained. Existing P1-only statepoints must be rerun to obtain P2/P3.
+  The runnable diagnostic verifies native means/uncertainties and all four
+  moments through DONJON NCR ingestion, not full-core physical accuracy.
+  Follow-up checks cover zero-flux substitution without raising local order,
+  failure without file mutation, and preservation of unknown source orders
+  through repeated component collapse. Preflight explicitly lists unknowns.
 - Added opt-in native OpenMC hexagonal face-current diagnostics without a custom
   HexMesh extension. Explicit unique cell domains preserve nested fine fills;
   surface/cell filters localize the six side faces and two axial faces. The first

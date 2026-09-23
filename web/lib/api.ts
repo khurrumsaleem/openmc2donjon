@@ -1330,6 +1330,11 @@ export interface SphExecutionResponse {
   max_update_residual?: number;
   converged?: boolean;
   scaled_datasets?: number;
+  /** Apply results only. Missing fields from older backends do not verify a handoff. */
+  input_format?: "converter" | "openmc-mgxs";
+  binding_mode?: string;
+  sidecar_input_hash_verified?: boolean;
+  mock_mode?: boolean;
 }
 
 export interface DonjonExecutionRequest {

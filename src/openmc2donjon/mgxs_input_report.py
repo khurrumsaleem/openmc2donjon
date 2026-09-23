@@ -18,6 +18,8 @@ class InputReport:
     ok: bool = True
     energy_groups: int | None = None
     legendre_order: int | None = None
+    source_legendre_orders: dict[str, int] = field(default_factory=dict)
+    source_legendre_orders_unknown: list[str] = field(default_factory=list)
     energy_group_structure: str | None = None
     energy_bounds_sha256: str | None = None
     energy_mesh_id: str | None = None
@@ -145,6 +147,16 @@ def print_report(report: InputReport) -> None:
     print(f"== {Path(report.path).name} ==")
     print(f"  {status}  path: {report.path}")
     print(f"        energy_groups={report.energy_groups} legendre_order={report.legendre_order}")
+    if report.source_legendre_orders or report.source_legendre_orders_unknown:
+        counts = {order: list(report.source_legendre_orders.values()).count(order)
+                  for order in sorted(set(report.source_legendre_orders.values()))}
+        labels = [f"P{order}: {count} region(s)" for order, count in counts.items()]
+        if report.source_legendre_orders_unknown:
+            labels.append(f"unknown: {len(report.source_legendre_orders_unknown)} region(s)")
+        print("        source scattering orders: " + ", ".join(labels))
+        if report.legendre_order is not None and any(order < report.legendre_order for order in counts):
+            print("        legendre_order is the storage maximum; "
+                  "padded moments are truncations, not measurements")
     structure = report.energy_group_structure or "unspecified"
     digest = (
         "none"
@@ -293,6 +305,8 @@ def input_report_payload(report: InputReport) -> dict[str, object]:
         "ok": report.ok,
         "energy_groups": report.energy_groups,
         "legendre_order": report.legendre_order,
+        "source_legendre_orders": report.source_legendre_orders,
+        "source_legendre_orders_unknown": report.source_legendre_orders_unknown,
         "energy_group_structure": report.energy_group_structure,
         "energy_bounds_sha256": report.energy_bounds_sha256,
         "energy_mesh_id": report.energy_mesh_id,

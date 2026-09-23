@@ -9,8 +9,12 @@ from typing import Iterable
 
 import numpy as np
 
+from .collapse_io import read_collapse_vector, read_standard_deviation, run_collapse
+from .collapse_substitution import write_collapsed_substitutions
 from .hdf5_names import read_mixture_names, write_string_dataset
+from .mgxs_fields import COLLAPSE_VECTOR_FIELDS
 from .mgxs_physics_checks import evaluate_mgxs_physics
+from .scatter_layout import read_collapse_scatter, write_canonical_scatter_axes
 
 
 SCHEMA = "openmc2donjon.component-collapse.v1"
@@ -20,16 +24,7 @@ SCATTER_CONTRACT_ATTRS = (
     "openmc_scatter_balance_dataset",
     "openmc_transport_mgxs_type",
 )
-VECTOR_XS = (
-    "total",
-    "transport_total",
-    "absorption",
-    "reduced_absorption",
-    "fission",
-    "nu_fission",
-    "kappa_fission",
-    "inverse_velocity",
-)
+VECTOR_XS = tuple(COLLAPSE_VECTOR_FIELDS)
 
 
 def collapse_components(
@@ -48,19 +43,25 @@ def collapse_components(
     arithmetic average of position-wise MGXS values.
     """
 
+    return run_collapse(
+        input_h5, output_h5, force=force, summary_json=summary_json,
+        writer=lambda source, target: _collapse_components(source, target, groups=groups),
+    )
+
+
+def _collapse_components(
+    source_path: Path,
+    destination: Path,
+    *,
+    groups: Iterable[tuple[str, Iterable[str]]],
+) -> dict[str, object]:
     import h5py
 
-    source_path = Path(input_h5)
-    destination = Path(output_h5)
     normalized_groups = tuple(
         (str(output_name), tuple(str(name) for name in source_names))
         for output_name, source_names in groups
     )
     _validate_group_declaration(normalized_groups)
-    if not source_path.exists():
-        raise FileNotFoundError(f"input HDF5 does not exist: {source_path}")
-    if destination.exists() and not force:
-        raise FileExistsError(f"output already exists; use --force: {destination}")
 
     with h5py.File(source_path, "r") as source:
         source_names = read_mixture_names(source)
@@ -78,22 +79,21 @@ def collapse_components(
             )
         if not np.all(np.isfinite(flux)) or np.any(flux <= 0.0):
             raise ValueError("/openmc_volume_flux must contain positive finite values")
-        flux_std = (
-            None
-            if "openmc_volume_flux_std_dev" not in source
-            else np.asarray(source["openmc_volume_flux_std_dev"][:], dtype=float)
-        )
+        flux_std = read_standard_deviation(source, "openmc_volume_flux", flux.shape)
         by_name = {name: index for index, name in enumerate(source_names)}
         scatter_contract = _require_common_scatter_contract(
             source,
             source_names=source_names,
             ngroups=ngroups,
         )
+        for name in source_names:
+            read_collapse_scatter(source["mixtures"][name], ngroups)
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         with h5py.File(destination, "w") as output:
             for key, value in source.attrs.items():
                 output.attrs[key] = value
+            write_canonical_scatter_axes(output.attrs)
             _write_scatter_contract_attrs(output.attrs, scatter_contract)
             output.attrs["component_collapse_schema"] = SCHEMA
             output.attrs["component_collapse_source"] = str(source_path)
@@ -147,6 +147,9 @@ def collapse_components(
                     class_flux,
                     ngroups,
                 )
+                write_collapsed_substitutions(
+                    target, member_groups, ngroups, tuple((i,) for i in range(ngroups)),
+                )
 
             flux_dataset = output.create_dataset(
                 "openmc_volume_flux",
@@ -185,10 +188,6 @@ def collapse_components(
         "weight": "openmc-volume-integrated-flux",
         "decision": "openmc2donjon_component_collapse_passed",
     }
-    if summary_json is not None:
-        path = Path(summary_json)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
 
@@ -202,7 +201,8 @@ def _write_component_attrs(
 ) -> None:
     first = member_groups[0]
     for key, value in first.attrs.items():
-        if key in {"source_domain_id", "source_domain_index", "volume"}:
+        if key.startswith("zero_flux_") or key in {"source_domain_id", "source_domain_index", "volume",
+                   "source_legendre_order", "scatter_padding"}:
             continue
         target.attrs[key] = value
     _write_scatter_contract_attrs(target.attrs, scatter_contract)
@@ -213,10 +213,20 @@ def _write_component_attrs(
     if not np.all(np.isfinite(volumes)) or np.any(volumes <= 0.0):
         raise ValueError(f"component {target.name}: source volumes must be positive")
     target.attrs["volume"] = float(np.sum(volumes))
+    target.attrs["fissionable"] = any(bool(group.attrs.get("fissionable", False))
+                                     for group in member_groups)
     target.attrs["source_domain_index"] = output_index + 1
     target.attrs["source_domain_type"] = "component-collapse"
     target.attrs["collapsed_source_mixtures"] = np.asarray(members, dtype="S")
     target.attrs["collapsed_source_count"] = len(members)
+    # A legacy member's stored maximum is not evidence of its original order.
+    # -1 is an audit-only sentinel, never a source_legendre_order declaration.
+    orders = [int(group.attrs.get("source_legendre_order", -1)) for group in member_groups]
+    target.attrs["collapsed_source_legendre_orders"] = orders
+    if all(order >= 0 for order in orders):
+        stored_order = int(first.file.attrs["legendre_order"])
+        target.attrs["source_legendre_order"] = max(orders)
+        target.attrs["scatter_padding"] = "zero-truncation" if max(orders) < stored_order else "none"
 
 
 def _require_common_scatter_contract(
@@ -317,30 +327,32 @@ def _write_component_datasets(
     class_flux: np.ndarray,
     ngroups: int,
 ) -> None:
+    structural_zeros = [_declared_nonfission_zeros(group, ngroups) for group in member_groups]
     for name in VECTOR_XS:
-        if not all(name in group for group in member_groups):
+        resolved = [read_collapse_vector(group, name, ngroups) for group in member_groups]
+        if all(item is None for item in resolved):
             continue
-        values = np.stack([np.asarray(group[name][:], dtype=float) for group in member_groups])
-        if values.shape != (len(member_groups), ngroups):
-            raise ValueError(f"{name} must have one vector per source mixture")
+        if any(item is None for item in resolved):
+            raise ValueError(
+                f"{target.name}: partial {name} coverage across source mixtures; "
+                "cannot discard or assume zero"
+            )
+        values = np.stack([item.values for item in resolved])
         collapsed = np.sum(values * member_flux, axis=0) / class_flux
         target.create_dataset(name, data=collapsed)
         std_name = f"{name}_std_dev"
-        if all(std_name in group for group in member_groups):
-            std_values = np.stack(
-                [np.asarray(group[std_name][:], dtype=float) for group in member_groups]
-            )
-            if std_values.shape != values.shape:
-                raise ValueError(f"{std_name} must match the source {name} vectors")
+        std_values, zero_sources = _component_standard_deviations(
+            target, member_groups, name, [item.std for item in resolved], structural_zeros, ngroups,
+        )
+        if std_values is not None:
             collapsed_std = np.sum(np.abs(std_values * member_flux), axis=0) / class_flux
-            _write_component_uncertainty(target, std_name, collapsed_std)
+            _write_component_uncertainty(
+                target, std_name, collapsed_std, structural_zero_sources=zero_sources,
+            )
 
     if all("scatter_matrix" in group for group in member_groups):
-        scatter = np.stack(
-            [np.asarray(group["scatter_matrix"][:], dtype=float) for group in member_groups]
-        )
-        if scatter.ndim != 4 or scatter.shape[2:] != (ngroups, ngroups):
-            raise ValueError("scatter_matrix must have shape (moment, from, to)")
+        pairs = [read_collapse_scatter(group, ngroups) for group in member_groups]
+        scatter = np.stack([mean for mean, _std in pairs])
         weights = member_flux[:, np.newaxis, :, np.newaxis]
         collapsed_scatter = np.sum(scatter * weights, axis=0) / class_flux[
             np.newaxis, :, np.newaxis
@@ -348,17 +360,10 @@ def _write_component_datasets(
         dataset = target.create_dataset("scatter_matrix", data=collapsed_scatter)
         for key, value in member_groups[0]["scatter_matrix"].attrs.items():
             dataset.attrs[key] = value
-        if all("scatter_matrix_std_dev" in group for group in member_groups):
-            scatter_std = np.stack(
-                [
-                    np.asarray(group["scatter_matrix_std_dev"][:], dtype=float)
-                    for group in member_groups
-                ]
-            )
-            if scatter_std.shape != scatter.shape:
-                raise ValueError(
-                    "scatter_matrix_std_dev must match source scatter_matrix"
-                )
+        write_canonical_scatter_axes(target.attrs)
+        write_canonical_scatter_axes(dataset.attrs)
+        if all(std is not None for _mean, std in pairs):
+            scatter_std = np.stack([std for _mean, std in pairs])
             collapsed_scatter_std = np.sum(
                 np.abs(scatter_std * weights), axis=0
             ) / class_flux[np.newaxis, :, np.newaxis]
@@ -367,6 +372,7 @@ def _write_component_datasets(
                 "scatter_matrix_std_dev",
                 collapsed_scatter_std,
             )
+            write_canonical_scatter_axes(target["scatter_matrix_std_dev"].attrs)
 
     if all("chi" in group for group in member_groups):
         chi = np.stack([np.asarray(group["chi"][:], dtype=float) for group in member_groups])
@@ -384,12 +390,12 @@ def _write_component_datasets(
         else:
             collapsed_chi = np.zeros(ngroups, dtype=float)
         target.create_dataset("chi", data=collapsed_chi)
-        if all("chi_std_dev" in group for group in member_groups):
-            chi_std = np.stack(
-                [np.asarray(group["chi_std_dev"][:], dtype=float) for group in member_groups]
-            )
-            if chi_std.shape != chi.shape:
-                raise ValueError("chi_std_dev must match the source chi vectors")
+        chi_std, zero_sources = _component_standard_deviations(
+            target, member_groups, "chi",
+            [read_standard_deviation(group, "chi", (ngroups,)) for group in member_groups],
+            structural_zeros, ngroups,
+        )
+        if chi_std is not None:
             if float(np.sum(source_weights)) > 0.0:
                 numerator_std = np.sum(
                     np.abs(chi_std * source_weights[:, np.newaxis]), axis=0
@@ -407,14 +413,56 @@ def _write_component_datasets(
                 target,
                 "chi_std_dev",
                 collapsed_chi_std,
+                structural_zero_sources=zero_sources,
             )
 
 
-def _write_component_uncertainty(target, name: str, values: np.ndarray) -> None:
+def _declared_nonfission_zeros(group, ngroups: int) -> bool:
+    """Require explicit nonfissionability and the complete zero fission family.
+
+    A zero Monte Carlo estimate alone is not proof of a structural zero. No
+    exemption applies to heat, scattering, or any other optional response.
+    """
+    flag = group.attrs.get("fissionable")
+    if not isinstance(flag, (bool, np.bool_, int, np.integer)) or flag != 0:
+        return False
+    for name in ("fission", "nu_fission", "chi"):
+        if name not in group or getattr(group[name], "shape", None) != (ngroups,):
+            return False
+        values = np.asarray(group[name][()], dtype=float)
+        if not np.all(np.isfinite(values)) or np.any(values != 0.0):
+            return False
+    return True
+
+
+def _component_standard_deviations(target, members, name, deviations, structural_zeros, ngroups):
+    if all(std is None for std in deviations):
+        return None, ()
+    completed = []
+    zero_sources = []
+    for group, std, structural in zip(members, deviations, structural_zeros, strict=True):
+        if std is None:
+            if name not in {"fission", "nu_fission", "chi"} or not structural:
+                raise ValueError(
+                    f"{target.name}: partial {name}_std_dev coverage across source mixtures; "
+                    f"missing for {group.name} without a declared structural zero"
+                )
+            std = np.zeros(ngroups)
+            zero_sources.append(group.name)
+        completed.append(std)
+    return np.stack(completed), tuple(zero_sources)
+
+
+def _write_component_uncertainty(
+    target, name: str, values: np.ndarray, *, structural_zero_sources=(),
+) -> None:
     dataset = target.create_dataset(name, data=values)
     dataset.attrs["component_uncertainty_method"] = (
         "conservative-l1-source-xs-bound-no-covariance"
     )
+    if structural_zero_sources:
+        dataset.attrs["component_structural_zero_sources"] = np.asarray(structural_zero_sources, dtype="S")
+        dataset.attrs["component_structural_zero_basis"] = "declared-nonfissionable-and-zero-fission-family"
 
 
 def _copy_flux_attrs(source, target, names: tuple[str, ...]) -> None:

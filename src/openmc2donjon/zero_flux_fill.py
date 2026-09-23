@@ -29,6 +29,13 @@ When ``transport_total`` is touched, ``zero_flux_transport_method``
 records ``macrolib_p1_outscatter``, ``macrolib_nu_p1_outscatter``, or
 ``macrolib_p0_total``.
 
+For a declared local ``source_legendre_order``, substitution retains that
+matrix truncation even when the donor carries higher moments. Invalid local
+order metadata or nonzero truncated tails are rejected before any file changes.
+``zero_flux_scatter_order`` records the donor order;
+``zero_flux_applied_scatter_order`` records the highest copied order. A missing
+local-order declaration stays unknown; it is never inferred from donor data.
+
 Mixtures are matched to macrolib materials through a label attribute on the
 mixture group (default ``irena_mixture_label``); pass ``label_attr`` to use
 another attribute name.
@@ -62,6 +69,7 @@ from .openmc_provenance import (
     provenance_before_hdf5_mutation,
     refresh_openmc_provenance_after_hdf5_mutation,
 )
+from .scatter_order import ORDER_ATTRS, validate_order_metadata
 
 
 SCHEMA = "openmc2donjon.zero-flux-fill.v2"
@@ -86,6 +94,7 @@ class _FillPlan:
     transport_method: str | None
     scatter_format: str
     scatter_order: int
+    applied_scatter_order: int
 
 
 @dataclass(frozen=True)
@@ -334,7 +343,7 @@ def _apply_fill_plans(
             # Do not retain noisy higher moments in a substituted material row
             # when the source macrolib carries fewer Legendre orders.
             matrix[:, fill, :] = 0.0
-            for order in range(min(matrix.shape[0], plan.scatter.shape[0])):
+            for order in range(plan.applied_scatter_order + 1):
                 matrix[order][fill, :] = plan.scatter[order][fill, :]
             group["scatter_matrix"][...] = matrix
             if "scatter_matrix_std_dev" in group:
@@ -347,8 +356,11 @@ def _apply_fill_plans(
                 assert plan.transport_method is not None
                 _fill_dataset(group, fill, "transport_total", plan.transport)
                 group.attrs["zero_flux_transport_method"] = plan.transport_method
-                group.attrs["zero_flux_scatter_format"] = plan.scatter_format
-                group.attrs["zero_flux_scatter_order"] = plan.scatter_order
+            group.attrs["zero_flux_scatter_format"] = plan.scatter_format
+            # Retain the donor order separately from the applied truncation.
+            # Neither changes the target's original scoring-order declaration.
+            group.attrs["zero_flux_scatter_order"] = plan.scatter_order
+            group.attrs["zero_flux_applied_scatter_order"] = plan.applied_scatter_order
 
             # Preserve provenance when a file is filled in more than one pass
             # (for example zero-flux first and an opt-in noise criterion
@@ -361,6 +373,7 @@ def _apply_fill_plans(
                 previous_fill, fill
             ).astype(np.int64)
             group.attrs["zero_flux_fill_source"] = str(macrolib)
+            _validate_target_fill_arrays(group, h5)
             filled_per_mixture.append((name, len(fill)))
 
     return mixture_count, filled_per_mixture
@@ -399,6 +412,11 @@ def _preflight_fill_plans(
             )[0]
             if not len(fill):
                 continue
+            if "zero_flux_substitution_records" in group or "zero_flux_fill_semantics" in group.attrs:
+                raise ValueError(
+                    f"{name}: cannot refill collapsed zero-flux contributions; "
+                    "perform substitution before collapse to preserve donor provenance"
+                )
             label = _mixture_label(group, str(name), label_attr)
             if label not in by_name:
                 raise ValueError(
@@ -409,6 +427,10 @@ def _preflight_fill_plans(
                 by_name[label],
                 label=label,
                 expected_groups=int(np.asarray(group["total"][:]).size),
+                target_scatter_moments=min(
+                    group["scatter_matrix"].shape[0],
+                    int(group.attrs.get("source_legendre_order", group["scatter_matrix"].shape[0] - 1)) + 1,
+                ),
                 fill=fill,
                 contract=target_contracts[str(name)],
                 include_transport="transport_total" in group,
@@ -425,6 +447,7 @@ def _validated_fill_plan(
     *,
     label: str,
     expected_groups: int,
+    target_scatter_moments: int,
     fill: np.ndarray,
     contract: _ResolvedScatterContract,
     include_transport: bool,
@@ -569,6 +592,7 @@ def _validated_fill_plan(
         transport_method=transport_method,
         scatter_format=scatter_format,
         scatter_order=int(getattr(xsdata, "order", scatter.shape[0] - 1)),
+        applied_scatter_order=min(target_scatter_moments, scatter.shape[0]) - 1,
     )
 
 
@@ -668,6 +692,8 @@ def _validate_target_fill_arrays(group: Any, h5: Any) -> None:
             f"(moment, {energy_groups}, {energy_groups})"
         )
     _require_target_array(group["scatter_matrix"], scatter_shape)
+    if "legendre_order" in h5.attrs and scatter_shape[0] != int(h5.attrs["legendre_order"]) + 1:
+        raise ValueError(f"{group.name}: scatter moment dimension does not match stored legendre_order")
     if "scatter_matrix_std_dev" in group:
         _require_target_array(group["scatter_matrix_std_dev"], scatter_shape)
     for attrs in (h5.attrs, group.attrs):
@@ -680,6 +706,13 @@ def _validate_target_fill_arrays(group: Any, h5: Any) -> None:
                     f"{group.name}: zero-flux fill requires "
                     "scatter_axes='moment,from,to'"
                 )
+    if ORDER_ATTRS.intersection(group.attrs):
+        validate_order_metadata(
+            group.attrs, np.asarray(group["scatter_matrix"]), axes="moment,from,to",
+            stored_order=scatter_shape[0] - 1,
+            std_dev=np.asarray(group["scatter_matrix_std_dev"])
+            if "scatter_matrix_std_dev" in group else None,
+        )
 
 
 def _require_target_array(dataset: Any, expected: tuple[int, ...]) -> None:

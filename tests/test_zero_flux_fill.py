@@ -1019,6 +1019,11 @@ class ZeroFluxFillTests(unittest.TestCase):
                 actual = candidate_datasets[name]
                 self.assertEqual(expected.dtype, actual.dtype, name)
                 np.testing.assert_array_equal(actual, expected, err_msg=name)
+            # The numerical legacy behavior is unchanged. The new audit field
+            # distinguishes the applied order from the donor's stored order.
+            for name in ("fuel", "sodium"):
+                self.assertEqual(candidate_attrs.pop(
+                    (f"mixtures/{name}", "zero_flux_applied_scatter_order")), 1)
             self.assertEqual(sorted(reference_attrs), sorted(candidate_attrs))
             for key, expected in reference_attrs.items():
                 actual = candidate_attrs[key]

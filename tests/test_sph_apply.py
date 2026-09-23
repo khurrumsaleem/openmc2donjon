@@ -291,6 +291,9 @@ class SphApplyTests(unittest.TestCase):
             self.assertEqual(payload["decision"], "openmc2donjon_sph_apply_passed")
             self.assertEqual(payload["operator"], "divide-xs-by-nsph")
             self.assertEqual(payload["mixtures"], ["fuel", "moderator"])
+            self.assertFalse(payload["sidecar_input_hash_verified"])
+            self.assertEqual(payload["binding_mode"], "converter-unbound")
+            self.assertIn("not a verified physical-SPH handoff", stdout.getvalue())
             with h5py.File(output, "r") as h5:
                 np.testing.assert_allclose(h5["mixtures/fuel/total"][:], [5.0, 40.0])
                 self.assertNotIn("sph", h5["mixtures/fuel"])

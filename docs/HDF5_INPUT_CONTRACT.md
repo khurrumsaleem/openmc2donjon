@@ -72,7 +72,7 @@ Required attributes:
 | Path | Type | Meaning |
 | --- | --- | --- |
 | `/attrs/energy_groups` | integer | number of energy groups `G` |
-| `/attrs/legendre_order` | integer | highest scattering Legendre order `L` |
+| `/attrs/legendre_order` | integer | common stored maximum scattering Legendre order `L` |
 
 Required datasets:
 
@@ -172,11 +172,148 @@ Recommended mixture attributes:
 | `fissionable` | bool | required physical fission-source declaration |
 | `scatter_format` | string | normally `legendre` |
 | `scatter_axes` | string | normally `moment,from,to` |
+| `source_legendre_order` | integer, optional | local source order before padding; `0 <= order <= L` |
+| `scatter_padding` | string, optional | `none` if local order equals `L`, otherwise `zero-truncation` |
 | `volume` | float | spatial-domain volume; when present, strictly positive and finite |
 | `openmc_scatter_mgxs_type` | string | selected OpenMC scattering estimator: ordinary `scatter matrix` / `consistent scatter matrix`, or explicitly nu-weighted `nu-scatter matrix` / `consistent nu-scatter matrix` |
 | `openmc_scatter_multiplicity_weighted` | bool | whether the selected scattering matrix includes outgoing-neutron multiplicity |
 | `openmc_scatter_balance_dataset` | string | `absorption` for ordinary scattering; `reduced_absorption` for nu-weighted scattering |
 | `openmc_transport_mgxs_type` | string | OpenMC estimator used for `transport_total`: `transport` with ordinary scattering, or `nu-transport` with nu-weighted scattering |
+
+`source_legendre_order` and `scatter_padding` must either both be absent (legacy
+input) or both be present. When the local source order is smaller than the root
+storage maximum, all higher moments must be exactly zero in both the scattering
+mean and any standard-deviation dataset. These entries represent **intentional
+truncation**, not measured physical zeros or zero Monte Carlo uncertainty.
+See the [mixed-order example](../examples/openmc_mixed_order/).
+
+Component collapse writes `collapsed_source_legendre_orders` in the order of
+`collapsed_source_mixtures`, using `-1` for an unknown immediate contributor.
+Only when all contributor orders are known does it declare the combined maximum
+in `source_legendre_order` and its matching `scatter_padding`; otherwise both
+are omitted and preflight reports the combined order as unknown. `-1` is only
+an audit sentinel and is never valid as a `source_legendre_order` value.
+
+Component and energy collapse accept both supported scattering layouts, with
+the same mixture → root `scatter_axes` / `axes` precedence as Converter. Means
+and matching standard deviations are normalized together; output matrices and
+axis metadata use `(moment, from, to)`. Shape inference is allowed only when
+unambiguous: for example, a 4-group/P3 cube requires an explicit axis declaration.
+Legacy 2D P0 matrices are emitted as 3D single-moment matrices. Invalid layouts,
+inconsistent standard deviations, and nonzero declared truncated moments are
+rejected before the destination is opened.
+
+Both collapse commands validate the reference weights before processing and
+again before publication. `/openmc_volume_flux` and any matching standard
+deviations must declare `group_order=mgxs_donjon` and `mixture_names` exactly
+matching the source domain order. Missing or inconsistent declarations are
+rejected, not silently reordered or relabeled.
+
+Collapse accepts the same heat-factor and inverse-velocity spellings as
+Converter (listed below), even when different contributors use different
+spellings. It writes canonical `kappa_fission` and `inverse_velocity` datasets
+without changing units. Duplicate aliases must agree exactly in their values
+and in any supplied standard deviations; conflicting aliases are rejected.
+For component collapse, a vector present in any contributor must be present in
+all contributors to that component. Partial coverage is rejected, not dropped
+or assumed to be zero. Likewise, partially supplied vector standard deviations
+are rejected; entirely absent uncertainty remains absent. The narrow exception
+is a declared nonfissionable contributor (`fissionable=false` or integer `0`)
+with complete, finite, group-wise `fission`, `nu_fission`, and `chi` vectors
+that are all exactly zero. Missing uncertainties for those three structural
+placeholders contribute zero when another member supplies uncertainty. The
+output records the exempted sources in `component_structural_zero_sources`
+and the basis in `component_structural_zero_basis` on the uncertainty dataset.
+A zero tally in a fissile or undeclared region is **not** sufficient evidence;
+no such exemption applies to heat, scattering, or other response quantities.
+
+For available vector-XS and scattering standard deviations, collapse uses a
+conservative L1 bound for weighted source-XS contributions, **conditional on
+fixed reference-flux weights**. This is not full covariance propagation and does
+not include uncertainty in those weights. Energy collapse labels this with
+`energy_uncertainty_method=conservative-l1-source-xs-bound-no-covariance`.
+Energy collapse also retains chi uncertainty: normalization uses a first-order
+L1 Jacobian bound, labeled `first-order-l1-normalized-chi-no-covariance` (a zero
+spectrum uses the unnormalized sum bound). Missing uncertainty is not replaced
+by zero; component collapse requires uncertainty from every contributor to
+report a combined value. Malformed, negative, nonfinite or orphan standard
+deviations are rejected. Component chi uncertainty is conditional on fixed
+fission-source weights as well as fixed reference flux; it does not propagate
+uncertainty in the nu-fission weights or their covariance.
+
+Both collapse commands operate **before model-specific equivalence**. Inputs
+containing SPH factors (`sph`, `SPH`, `NSPH`), SPH application/binding metadata,
+or ADF data are rejected, even for an identity mapping. They are never averaged,
+silently removed, or declared valid on a changed coarse model. Use the original
+HDF5 directly for an unchanged model; otherwise collapse the uncorrected
+reference and recompute equivalence. An isolated `sph_applied=false` flag does
+not block uncorrected input.
+
+Output is built in a sibling temporary file, leaving the input and existing
+destination unchanged on calculation, write or provenance-refresh failure.
+Input/output aliases are rejected. Existing OpenMC provenance must pass its
+integrity check before processing and is rebound to the final payload. The
+cumulative `/provenance/collapse/history_json` records each operation, parent
+file SHA256, mapping and weighting method; this history is included in the
+refreshed payload binding. Legacy inputs remain legacy: adding a processing
+history does not invent missing OpenMC reference evidence or confer physical
+equivalence acceptance.
+
+Zero-flux filling preserves any declared local truncation and records
+`zero_flux_scatter_order` (donor order) separately from
+`zero_flux_applied_scatter_order` (highest copied moment). It never promotes an
+unknown original order to a known one. This metadata does not turn deterministic
+library substitution into Monte Carlo observations.
+
+After collapse, `zero_flux_filled_groups` is the union of current zero-based
+DONJON group indices **containing substituted contributions**. It is mapped
+through energy collapse and includes every spatial contributor, not only the
+first one. `zero_flux_fill_semantics=contains-substituted-contributions`
+distinguishes this from direct donor replacement. A per-mixture scalar JSON
+dataset `zero_flux_substitution_records` retains each original file/mixture,
+original group indices, donor metadata, and current affected indices, including
+through repeated collapse. It uses schema
+`openmc2donjon.collapsed-substitution.v1` and is covered by any refreshed OpenMC
+payload binding. No single donor or donor order is asserted for a combined
+component. Actual refilling of a mixture carrying these derived records is
+rejected: perform substitution on the source before collapse. A no-op fill
+leaves the records intact. Neither collapse nor this audit trail establishes
+physical SPH acceptance; substituted contributions remain subject to its gate.
+
+SPH application reads only the supported cross sections and uncertainties it
+scales. Unscaled observables, scalar/string metadata (including substitution
+records), and dataset annotations are preserved. For Converter-layout input,
+scattering uses the same calculation-state → mixture → root `scatter_axes` /
+`axes` precedence and supported axis aliases as Converter. Unambiguous shapes
+can be inferred; cubic arrays without an axis declaration are rejected.
+Means and standard deviations are divided along the incoming-group axis;
+their existing storage layout and axis annotations are retained.
+
+Both Converter-layout and native OpenMC-MG application stage their output in a sibling temporary file,
+check that the input and sidecar have not changed, and refresh any verified
+OpenMC binding before publication. Processing, write, or binding failures leave
+an existing destination unchanged; output aliases of the input or sidecar are
+rejected. This safe numerical transformation does not relax physical acceptance:
+handoffs containing macrolib-substituted contributions remain disallowed by
+the strict physical-SPH gate.
+
+Only a sidecar whose `sph_input_h5_sha256` matches the actual input is recorded
+as `converter-final-exact-input` with `sidecar_input_hash_verified=true` in the
+application report (and `sph_apply_sidecar_input_hash_verified=true` in HDF5).
+A missing or empty hash permits legacy numerical use but produces
+`converter-unbound` and a false verification flag, consistently in HDF5, the
+console report, and JSON summary. A malformed or mismatched hash is an error,
+not an excuse to downgrade to unbound mode. Strict physical-SPH acceptance
+continues to reject unbound output; a matching hash alone is not sufficient
+for physical acceptance.
+
+The web apply response carries `input_format`, `binding_mode`, and
+`sidecar_input_hash_verified` from the same report. The result card offers
+Converter's physical-check route only for a verified exact-input binding in
+Converter format. Unbound numerical outputs get a recovery instruction;
+native OpenMC MG files get the next-MG-run instruction instead. Missing or
+contradictory evidence from an older backend does not enable the handoff link,
+and mock responses are explicitly marked as demonstrations, not verified results.
 
 ## Optional Mixture Items
 

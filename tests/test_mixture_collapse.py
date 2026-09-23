@@ -143,6 +143,7 @@ class MixtureCollapseTests(unittest.TestCase):
                 h5.attrs["openmc_scatter_balance_dataset"] = "reduced_absorption"
                 h5.attrs["openmc_transport_mgxs_type"] = "nu-transport"
                 del h5["mixtures/B/reduced_absorption"]
+                del h5["mixtures/B/reduced_absorption_std_dev"]
 
             with self.assertRaisesRegex(
                 ValueError,
@@ -248,8 +249,10 @@ def _write_source(path: Path) -> None:
         h5.create_dataset("mixture_names", data=np.asarray(names, dtype="S"))
         flux_ds = h5.create_dataset("openmc_volume_flux", data=flux)
         flux_ds.attrs["mixture_names"] = np.asarray(names, dtype="S")
+        flux_ds.attrs["group_order"] = "mgxs_donjon"
         flux_std = h5.create_dataset("openmc_volume_flux_std_dev", data=0.1 * flux)
         flux_std.attrs["mixture_names"] = np.asarray(names, dtype="S")
+        flux_std.attrs["group_order"] = "mgxs_donjon"
         mixtures = h5.create_group("mixtures")
         for index, name in enumerate(names):
             group = mixtures.create_group(name)

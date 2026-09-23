@@ -20,6 +20,8 @@ from .energy_groups import (
     load_energy_bounds_text,
 )
 from .hdf5_names import read_mixture_names
+from .mgxs_fields import H_FACTOR_DATASETS, INVERSE_VELOCITY_DATASETS
+from .scatter_order import ORDER_ATTRS, validate_order_metadata
 from .mgxs_input_equivalence import (
     SPH_DATASETS,  # noqa: F401  (re-exported for mgxs_inspect)
     adf_names_for_group,
@@ -56,20 +58,6 @@ from .mgxs_input_uncertainty import (
 VALID_MULTICOMPO_EXTENSIONS = (".mco", ".mcompo.txt")
 VALID_MACROLIB_EXTENSIONS = (".macrolib.txt",)
 REQUIRED_DATASETS = ("total", "absorption", "fission", "nu_fission", "chi", "scatter_matrix")
-INVERSE_VELOCITY_DATASETS = (
-    "inverse_velocity",
-    "inverse-velocity",
-    "OVERV",
-    "overv",
-)
-H_FACTOR_DATASETS = (
-    "h_factor",
-    "H-FACTOR",
-    "H_FACTOR",
-    "kappa_fission",
-    "kappa_fission_xs",
-    "kappa_fission_cross_section",
-)
 OPTIONAL_VECTOR_DATASETS = (
     "transport_total",
     "reduced_absorption",
@@ -1631,6 +1619,21 @@ def validate_calculation(
     )
     if not np.all(np.isfinite(scatter)):
         report.fail(f"mixture {name}: scatter_matrix contains non-finite values")
+    if moments is not None:
+        attrs = {key: attr_with_parent(group, parent_group, key) for key in ORDER_ATTRS
+                 if attr_with_parent(group, parent_group, key) is not None}
+        try:
+            local_order = validate_order_metadata(
+                attrs, scatter, axes=axes, stored_order=legendre_order,
+                std_dev=np.asarray(group["scatter_matrix_std_dev"][:])
+                if "scatter_matrix_std_dev" in group else None,
+            )
+            if local_order is not None:
+                report.source_legendre_orders[name] = local_order
+            else:
+                report.source_legendre_orders_unknown.append(name)
+        except ValueError as exc:
+            report.fail(f"mixture {name}: {exc}")
     for field in OPTIONAL_VECTOR_DATASETS:
         if field in group:
             validate_vector(group[field], ngroups, report, f"mixture {name}: {field}")

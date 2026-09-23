@@ -8,6 +8,7 @@ import { CopyCliButton } from "@/components/commands/CopyCliButton";
 import FileBrowserModal from "@/components/inspect/FileBrowserModal";
 import OpenmcSphWorkflowPanel from "@/components/OpenmcSphWorkflowPanel";
 import NativeSphRunner from "@/components/NativeSphRunner";
+import AppliedSphResult from "@/components/AppliedSphResult";
 import OpenmcSphPhysicsSummaryCard from "@/components/openmc/OpenmcSphPhysicsSummaryCard";
 import {
   BooleanChoice,
@@ -21,7 +22,6 @@ import {
 } from "@/lib/equivalenceCommand";
 import { isAdfEquivalenceKind } from "@/lib/adfWorkflow";
 import {
-  equivalenceAppliedHandoffHref,
   equivalenceConverterReferenceHref,
   equivalenceOperationHref,
   equivalenceRouteHref,
@@ -604,7 +604,13 @@ function EquivalencePageContent() {
                   </button>
                 </div>
               ) : null}
-              {executionState.kind === "ok" ? (
+              {executionState.kind === "ok" && executionState.data.operation === "apply-sph" ? (
+                <AppliedSphResult
+                  result={executionState.data}
+                  projectRoot={projectRoot}
+                  componentId={componentId}
+                />
+              ) : executionState.kind === "ok" ? (
                 <div className={
                   "mt-3 rounded-md border px-3 py-2 text-[12px] " +
                   (executionState.data.operation === "sph-sidecar" && executionState.data.converged === false
@@ -680,21 +686,6 @@ function EquivalencePageContent() {
                   className="mt-3 inline-flex text-[12px] font-semibold text-[var(--accent-2)] hover:underline"
                 >
                   After convergence and independent validation: apply SPH →
-                </Link>
-              ) : null}
-              {kind === "apply-sph" &&
-              executionState.kind === "ok" &&
-              executionState.data.operation === "apply-sph" &&
-              executionState.data.output_path.trim() ? (
-                <Link
-                  href={equivalenceAppliedHandoffHref({
-                    inputH5: executionState.data.output_path,
-                    projectRoot,
-                    componentId,
-                  })}
-                  className="mt-3 inline-flex text-[12px] font-semibold text-[var(--accent-2)] hover:underline"
-                >
-                  Output confirmed — continue with this HDF5 in Converter →
                 </Link>
               ) : null}
             </aside>

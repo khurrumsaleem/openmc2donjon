@@ -21,6 +21,7 @@ import numpy as np
 
 from .energy_groups import energy_bounds_sha256
 from .hdf5_names import write_string_dataset
+from .scatter_order import ORDER_ATTRS
 from .mgxs_physics_checks import (
     DEFAULT_CHI_SUM_TOLERANCE,
     _canonical_scatter_mgxs_type,
@@ -158,7 +159,7 @@ def export_openmc_mgxs_library(
         name = _domain_name(spec.domain, index, domain_names, used_names, spec.name)
         attrs = dict(spec.attrs or {})
         reserved_contract_attrs = sorted(
-            SCATTER_CONTRACT_ATTRS.intersection(str(key) for key in attrs)
+            (SCATTER_CONTRACT_ATTRS | ORDER_ATTRS).intersection(str(key) for key in attrs)
         )
         if reserved_contract_attrs:
             raise ValueError(
@@ -233,7 +234,8 @@ def export_openmc_mgxs_library(
         root_attrs=root_attrs,
     )
     reserved_root_attrs = sorted(
-        SCATTER_CONTRACT_ATTRS.intersection(effective_root_attrs)
+        (SCATTER_CONTRACT_ATTRS | ORDER_ATTRS | {"legendre_order", "energy_groups"}).intersection(
+            effective_root_attrs)
     )
     if reserved_root_attrs:
         raise ValueError(
@@ -271,6 +273,9 @@ def export_openmc_mgxs_library(
             group.attrs["fissionable"] = bool(data["fissionable"])
             group.attrs["scatter_format"] = "legendre"
             group.attrs["scatter_axes"] = "moment,from,to"
+            source_order = data["scatter_matrix"].shape[0] - 1
+            group.attrs["source_legendre_order"] = source_order
+            group.attrs["scatter_padding"] = "zero-truncation" if source_order < legendre_order else "none"
             group.attrs["source_domain_index"] = export_index
             _write_hdf5_attr_if_present(
                 group,
@@ -741,6 +746,8 @@ def _required_scatter(
     _require_uncorrected_scatter(
         mgxs, library=library, label=f"domain {_domain_label(domain)}"
     )
+    if xs_kwargs and xs_kwargs.get("moment", "all") != "all":
+        raise ValueError("Scatter export requires all moments through the declared local order")
     scatter = _as_scatter_moments(
         _mgxs_values(mgxs, xs_kwargs=xs_kwargs),
         ngroups,
@@ -756,6 +763,11 @@ def _required_scatter(
             _domain_label(domain),
         )
     )
+    declared_order = getattr(mgxs, "legendre_order", None)
+    if declared_order is not None and scatter.shape[0] != int(declared_order) + 1:
+        raise ValueError(f"domain {_domain_label(domain)}: scatter data omit declared Legendre moments")
+    if scatter_std_dev is not None and scatter_std_dev.shape != scatter.shape:
+        raise ValueError(f"domain {_domain_label(domain)}: scatter mean/std_dev moment shapes differ")
     return scatter, scatter_std_dev, actual_type or _scatter_mgxs_type_label(scatter_mgxs_type)
 
 

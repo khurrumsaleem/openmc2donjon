@@ -20,7 +20,13 @@ from .constants import (
     DONJON_SIGNATURE_WIDTH,
 )
 from .hdf5_names import read_mixture_names
+from .mgxs_fields import H_FACTOR_DATASETS, INVERSE_VELOCITY_DATASETS
 from .scatter import dense_moments_to_triplets
+from .scatter_layout import (
+    normalise_scatter_axes as _normalise_scatter_axes,
+    scatter_axes_from_attrs as _scatter_axes_from_attrs,
+)
+from .scatter_order import ORDER_ATTRS, validate_order_metadata
 
 
 DEFAULT_ROOT_NAME = "CPO"
@@ -879,7 +885,7 @@ def _optional_vector(group, name: str, ngroups: int) -> np.ndarray:
 
 
 def _inverse_velocity_from_hdf5(group, ngroups: int, mix_name: str) -> np.ndarray | None:
-    for name in ("inverse_velocity", "inverse-velocity", "OVERV", "overv"):
+    for name in INVERSE_VELOCITY_DATASETS:
         if name in group:
             return _vector(group[name][:], ngroups, mix_name, name)
     return None
@@ -954,14 +960,7 @@ def _h_factor_from_hdf5(
     *,
     default: float | None,
 ) -> np.ndarray | None:
-    for name in (
-        "h_factor",
-        "H-FACTOR",
-        "H_FACTOR",
-        "kappa_fission",
-        "kappa_fission_xs",
-        "kappa_fission_cross_section",
-    ):
+    for name in H_FACTOR_DATASETS:
         if name in group:
             return _vector(group[name][:], ngroups, mix_name, name)
     if default is None:
@@ -1066,80 +1065,19 @@ def _scatter_matrix_from_hdf5(
             f"mixture {mix_name}: scatter_matrix has {scatter.shape[0]} moments, "
             f"expected {expected_moments} from legendre_order"
         )
+    order_attrs = {**({} if parent_attrs is None else dict(parent_attrs)), **dict(group.attrs)}
+    if ORDER_ATTRS.intersection(order_attrs):
+        std = None
+        if "scatter_matrix_std_dev" in group:
+            raw_std = np.asarray(group["scatter_matrix_std_dev"][:], dtype=float)
+            if raw_std.shape != raw.shape:
+                raise ValueError(f"mixture {mix_name}: scatter standard-deviation shape mismatch")
+            std = raw_std[np.newaxis] if raw_std.ndim == 2 else _normalise_scatter_axes(
+                raw_std, ngroups, mix_name, expected_moments=scatter.shape[0],
+                axes=_scatter_axes_from_attrs(group.attrs, parent_attrs, root_attrs))
+        validate_order_metadata(order_attrs, scatter, axes="moment,from,to",
+                                stored_order=scatter.shape[0] - 1, std_dev=std)
     return np.ascontiguousarray(scatter, dtype=float)
-
-
-def _scatter_axes_from_attrs(group_attrs, parent_attrs, root_attrs) -> str | None:
-    """Use the same calculation → mixture → root precedence as the contract."""
-
-    for attrs in (group_attrs, parent_attrs, root_attrs):
-        if attrs is None:
-            continue
-        for name in ("scatter_axes", "axes"):
-            value = _attr_text(attrs.get(name))
-            if value:
-                return value
-    return None
-
-
-def _normalise_scatter_axes(
-    raw: np.ndarray,
-    ngroups: int,
-    mix_name: str,
-    *,
-    expected_moments: int | None,
-    axes: str | None,
-) -> np.ndarray:
-    if axes is not None:
-        normalized = axes.lower().replace(" ", "").replace("_", "")
-        moment_first = {
-            "moment,from,to",
-            "moment,in,out",
-            "moment,gin,gout",
-            "legendre,from,to",
-            "legendre,gin,gout",
-        }
-        moment_last = {
-            "from,to,moment",
-            "in,out,moment",
-            "gin,gout,moment",
-            "from,to,legendre",
-            "gin,gout,legendre",
-        }
-        if normalized in moment_first:
-            return raw
-        if normalized in moment_last:
-            return np.moveaxis(raw, -1, 0)
-        raise ValueError(
-            f"mixture {mix_name}: unsupported scatter_axes={axes!r}; "
-            "expected 'moment,from,to' or 'from,to,moment'"
-        )
-
-    moment_first_shape = raw.shape[1:] == (ngroups, ngroups)
-    moment_last_shape = raw.shape[:2] == (ngroups, ngroups)
-
-    if expected_moments is not None:
-        first_matches = moment_first_shape and raw.shape[0] == expected_moments
-        last_matches = moment_last_shape and raw.shape[2] == expected_moments
-        if first_matches and not last_matches:
-            return raw
-        if last_matches and not first_matches:
-            return np.moveaxis(raw, -1, 0)
-        if first_matches and last_matches:
-            raise ValueError(
-                f"mixture {mix_name}: ambiguous scatter_matrix shape {raw.shape}; "
-                "set scatter_axes='moment,from,to' or 'from,to,moment'"
-            )
-
-    if moment_first_shape and not moment_last_shape:
-        return raw
-    if moment_last_shape and not moment_first_shape:
-        return np.moveaxis(raw, -1, 0)
-
-    raise ValueError(
-        f"mixture {mix_name}: scatter_matrix shape {raw.shape} is not compatible "
-        f"with {ngroups} groups"
-    )
 
 
 def _attr_text(value) -> str | None:

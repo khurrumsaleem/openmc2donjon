@@ -10,24 +10,16 @@ from typing import Iterable
 import numpy as np
 
 from .constants import MGXS_DONJON_GROUP_ORDER
+from .collapse_io import read_collapse_vector, read_standard_deviation, run_collapse
+from .collapse_substitution import RECORD_DATASET, write_collapsed_substitutions
 from .energy_groups import energy_bounds_sha256
 from .hdf5_names import read_mixture_names
+from .mgxs_fields import COLLAPSE_VECTOR_FIELDS
+from .scatter_layout import read_collapse_scatter, write_canonical_scatter_axes
 
 
 SCHEMA = "openmc2donjon.energy-collapse.v1"
-VECTOR_XS = (
-    "total",
-    "transport_total",
-    "absorption",
-    "reduced_absorption",
-    "fission",
-    "nu_fission",
-    "kappa_fission",
-    "inverse_velocity",
-    "h_factor",
-    "H-FACTOR",
-    "H_FACTOR",
-)
+VECTOR_XS = tuple(COLLAPSE_VECTOR_FIELDS)
 
 
 def collapse_energy_groups(
@@ -47,15 +39,24 @@ def collapse_energy_groups(
     arithmetic averaging or fitted correction is used.
     """
 
+    return run_collapse(
+        input_h5, output_h5, force=force, summary_json=summary_json,
+        writer=lambda source, target: _collapse_energy_groups(
+            source, target, groups=groups, energy_group_structure=energy_group_structure,
+        ),
+    )
+
+
+def _collapse_energy_groups(
+    source_path: Path,
+    destination: Path,
+    *,
+    groups: Iterable[Iterable[int]],
+    energy_group_structure: str,
+) -> dict[str, object]:
     import h5py
 
-    source_path = Path(input_h5)
-    destination = Path(output_h5)
     mapping = tuple(tuple(int(group) for group in members) for members in groups)
-    if not source_path.exists():
-        raise FileNotFoundError(f"input HDF5 does not exist: {source_path}")
-    if destination.exists() and not force:
-        raise FileExistsError(f"output already exists; use --force: {destination}")
 
     with h5py.File(source_path, "r") as source:
         names = read_mixture_names(source)
@@ -78,10 +79,17 @@ def collapse_energy_groups(
             raise ValueError("/energy_bounds must be strictly ascending")
         collapsed_bounds = _collapsed_energy_bounds(bounds, mapping)
 
+        # Reject ambiguous layouts and corrupt truncation/uncertainty before
+        # opening the destination (including an existing --force target).
+        for name in names:
+            if "scatter_matrix" in source["mixtures"][name]:
+                read_collapse_scatter(source["mixtures"][name], source_groups)
+
         destination.parent.mkdir(parents=True, exist_ok=True)
         with h5py.File(destination, "w") as output:
             for key, value in source.attrs.items():
                 output.attrs[key] = value
+            write_canonical_scatter_axes(output.attrs)
             output.attrs["energy_groups"] = len(mapping)
             output.attrs["energy_group_count"] = len(mapping)
             output.attrs["energy_group_structure"] = str(energy_group_structure)
@@ -111,13 +119,8 @@ def collapse_energy_groups(
             _copy_attrs(source["openmc_volume_flux"], flux_dataset)
 
             if "openmc_volume_flux_std_dev" in source:
-                flux_std = np.asarray(
-                    source["openmc_volume_flux_std_dev"][:], dtype=float
-                )
-                if flux_std.shape != flux.shape:
-                    raise ValueError(
-                        "/openmc_volume_flux_std_dev shape must match reference flux"
-                    )
+                flux_std = read_standard_deviation(source, "openmc_volume_flux", flux.shape)
+                assert flux_std is not None
                 collapsed_std = np.stack(
                     [np.sum(np.abs(flux_std[:, group]), axis=1) for group in indices],
                     axis=1,
@@ -135,13 +138,15 @@ def collapse_energy_groups(
                 source_group = source["mixtures"][name]
                 target = mixtures.create_group(name)
                 for key, value in source_group.attrs.items():
-                    target.attrs[key] = value
+                    if not key.startswith("zero_flux_"):
+                        target.attrs[key] = value
                 _write_collapsed_mixture(
                     source_group,
                     target,
                     flux[mixture_index],
                     indices,
                 )
+                write_collapsed_substitutions(target, [source_group], source_groups, indices)
 
     report: dict[str, object] = {
         "schema": SCHEMA,
@@ -154,18 +159,15 @@ def collapse_energy_groups(
         "groups": [list(group) for group in mapping],
         "weight": "openmc-volume-integrated-flux",
     }
-    if summary_json is not None:
-        path = Path(summary_json)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
 
 def _write_collapsed_mixture(source, target, flux, groups) -> None:
     source_groups = len(flux)
-    supported = set(VECTOR_XS) | {
+    supported = {name for aliases in COLLAPSE_VECTOR_FIELDS.values() for name in aliases} | {
         "chi",
         "scatter_matrix",
+        RECORD_DATASET,
     }
     unsupported = [
         name
@@ -182,32 +184,42 @@ def _write_collapsed_mixture(source, target, flux, groups) -> None:
 
     collapsed_flux = np.asarray([np.sum(flux[group]) for group in groups])
     for name in VECTOR_XS:
-        if name not in source:
+        resolved = read_collapse_vector(source, name, source_groups)
+        if resolved is None:
             continue
-        values = np.asarray(source[name][:], dtype=float)
-        if values.shape != (source_groups,):
-            raise ValueError(f"mixture {source.name}: {name} must be group-wise")
+        values = resolved.values
         collapsed = np.asarray(
             [np.dot(values[group], flux[group]) / collapsed_flux[i] for i, group in enumerate(groups)]
         )
         dataset = target.create_dataset(name, data=collapsed)
-        _copy_attrs(source[name], dataset)
+        _copy_attrs(source[resolved.source_name], dataset)
+        std = resolved.std
+        if std is not None:
+            collapsed_std = np.asarray([
+                np.dot(std[group], flux[group]) / collapsed_flux[i]
+                for i, group in enumerate(groups)
+            ])
+            _write_uncertainty(source, target, name, collapsed_std, source_name=resolved.std_source_name)
 
     if "scatter_matrix" in source:
-        scatter = np.asarray(source["scatter_matrix"][:], dtype=float)
-        if scatter.ndim != 3 or scatter.shape[1:] != (source_groups, source_groups):
-            raise ValueError("scatter_matrix must have shape (moment, from, to)")
-        collapsed = np.zeros((scatter.shape[0], len(groups), len(groups)), dtype=float)
-        for coarse_from, fine_from in enumerate(groups):
-            denominator = collapsed_flux[coarse_from]
-            for coarse_to, fine_to in enumerate(groups):
-                block = scatter[:, fine_from, :][:, :, fine_to]
-                collapsed[:, coarse_from, coarse_to] = np.sum(
-                    block * flux[fine_from][np.newaxis, :, np.newaxis],
-                    axis=(1, 2),
-                ) / denominator
+        scatter, scatter_std = read_collapse_scatter(source, source_groups)
+        collapsed = _collapse_scatter(scatter, flux, collapsed_flux, groups)
         dataset = target.create_dataset("scatter_matrix", data=collapsed)
         _copy_attrs(source["scatter_matrix"], dataset)
+        write_canonical_scatter_axes(target.attrs)
+        write_canonical_scatter_axes(dataset.attrs)
+        if scatter_std is not None:
+            # All weights are non-negative. With fixed reference-flux weights,
+            # the same linear operator gives the no-covariance L1 XS bound.
+            std_dataset = target.create_dataset(
+                "scatter_matrix_std_dev",
+                data=_collapse_scatter(scatter_std, flux, collapsed_flux, groups),
+            )
+            _copy_attrs(source["scatter_matrix_std_dev"], std_dataset)
+            write_canonical_scatter_axes(std_dataset.attrs)
+            std_dataset.attrs["energy_uncertainty_method"] = (
+                "conservative-l1-source-xs-bound-no-covariance"
+            )
 
     if "chi" in source:
         chi = np.asarray(source["chi"][:], dtype=float)
@@ -219,12 +231,52 @@ def _write_collapsed_mixture(source, target, flux, groups) -> None:
             collapsed_chi /= total
         dataset = target.create_dataset("chi", data=collapsed_chi)
         _copy_attrs(source["chi"], dataset)
+        chi_std = read_standard_deviation(source, "chi", chi.shape)
+        if chi_std is not None:
+            if total > 0.0:
+                # First-order L1 Jacobian bound for normalized chi. Its
+                # normalization is correlated with each numerator; use the
+                # derivative of the ratio rather than treating them separately.
+                jacobian = np.stack([
+                    (np.isin(np.arange(source_groups), group) - collapsed_chi[i]) / total
+                    for i, group in enumerate(groups)
+                ])
+                collapsed_std = np.abs(jacobian) @ chi_std
+            else:
+                collapsed_std = np.asarray([np.sum(chi_std[group]) for group in groups])
+            _write_uncertainty(
+                source, target, "chi", collapsed_std,
+                method=("first-order-l1-normalized-chi-no-covariance" if total > 0.0
+                        else "conservative-l1-chi-sum-no-covariance"),
+            )
 
     for name, dataset in source.items():
         if name in supported or name.endswith("_std_dev"):
             continue
         if dataset.shape in {(), (1,)}:
             source.copy(name, target)
+
+
+def _write_uncertainty(
+    source, target, name, values, *,
+    method="conservative-l1-source-xs-bound-no-covariance",
+    source_name=None,
+) -> None:
+    std_name = f"{name}_std_dev"
+    dataset = target.create_dataset(std_name, data=values)
+    _copy_attrs(source[f"{source_name or name}_std_dev"], dataset)
+    dataset.attrs["energy_uncertainty_method"] = method
+
+
+def _collapse_scatter(scatter, flux, collapsed_flux, groups) -> np.ndarray:
+    collapsed = np.zeros((scatter.shape[0], len(groups), len(groups)), dtype=float)
+    for coarse_from, fine_from in enumerate(groups):
+        for coarse_to, fine_to in enumerate(groups):
+            block = scatter[:, fine_from, :][:, :, fine_to]
+            collapsed[:, coarse_from, coarse_to] = np.sum(
+                block * flux[fine_from][np.newaxis, :, np.newaxis], axis=(1, 2),
+            ) / collapsed_flux[coarse_from]
+    return collapsed
 
 
 def _collapse_flux(flux: np.ndarray, groups) -> np.ndarray:

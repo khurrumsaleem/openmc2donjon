@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import shutil
+import tempfile
 from typing import Any
 
 import numpy as np
@@ -17,6 +20,7 @@ from .openmc_provenance import (
     provenance_before_hdf5_mutation,
     refresh_openmc_provenance_after_hdf5_mutation,
 )
+from .scatter_layout import resolve_scatter_axes, scatter_axes_from_attrs
 from .sph_augment import load_sph_source
 
 
@@ -127,6 +131,8 @@ def print_report(report: SphApplyReport) -> None:
         "  sidecar input hash verified: "
         f"{str(report.sidecar_input_hash_verified).lower()}"
     )
+    if not report.sidecar_input_hash_verified:
+        print("  note: numerical application only; not a verified physical-SPH handoff")
     print(f"  mixtures: {len(report.mixture_names)}")
     print(f"  energy groups: {report.energy_groups}")
     print(f"  scaled datasets: {report.scaled_dataset_count}")
@@ -174,7 +180,7 @@ def apply_sph_to_mixture_arrays(
     datasets: dict[str, np.ndarray],
     sph: np.ndarray,
     *,
-    scatter_axes: str = "moment,from,to",
+    scatter_axes: str | None = "moment,from,to",
 ) -> AppliedMixture:
     """Return MGXS arrays corrected by the DONJON ``NSPH`` divisor convention.
 
@@ -211,7 +217,7 @@ def apply_sph_to_scatter_matrix(
     values: np.ndarray,
     sph: np.ndarray,
     *,
-    scatter_axes: str = "moment,from,to",
+    scatter_axes: str | None = "moment,from,to",
     label: str = "scatter_matrix",
 ) -> np.ndarray:
     """Divide scatter rows by SPH using the incoming/from-group axis."""
@@ -223,14 +229,16 @@ def apply_sph_to_scatter_matrix(
         return matrix / sph_vector[:, None]
     if matrix.ndim != 3:
         raise ValueError(f"{label} must be 2D or 3D, got shape {matrix.shape}")
-    axes = _scatter_axes(scatter_axes)
-    if axes == ("moment", "from", "to"):
+    axes = resolve_scatter_axes(
+        matrix, sph_vector.size, label, expected_moments=None, axes=scatter_axes,
+    )
+    if axes == "moment,from,to":
         if matrix.shape[1:] != (sph_vector.size, sph_vector.size):
             raise ValueError(
                 f"{label} shape {matrix.shape} is not compatible with {sph_vector.size} groups"
             )
         return matrix / sph_vector[None, :, None]
-    if axes == ("from", "to", "moment"):
+    if axes == "from,to,moment":
         if matrix.shape[:2] != (sph_vector.size, sph_vector.size):
             raise ValueError(
                 f"{label} shape {matrix.shape} is not compatible with {sph_vector.size} groups"
@@ -253,7 +261,9 @@ def apply_sph_to_hdf5(
     This variant handles the converter-facing ``/mixtures/<name>`` layout.
     Active ``sph`` / ``NSPH`` datasets are removed to prevent a downstream
     converter from applying the same factors again; the values are preserved
-    as ``applied_sph`` provenance datasets.
+    as ``applied_sph`` provenance datasets. Legacy sidecars without an input
+    hash remain numerically usable, but are explicitly recorded as unbound;
+    successful application alone is not physical-SPH acceptance.
     """
 
     import h5py
@@ -261,14 +271,7 @@ def apply_sph_to_hdf5(
     input_h5 = Path(input_h5)
     sph_source = Path(sph_source)
     output_h5 = Path(output_h5)
-    if not input_h5.exists():
-        raise FileNotFoundError(f"input HDF5 does not exist: {input_h5}")
-    if not sph_source.exists():
-        raise FileNotFoundError(f"SPH source does not exist: {sph_source}")
-    if input_h5.resolve() == output_h5.resolve():
-        raise ValueError("output HDF5 must be different from input HDF5")
-    if output_h5.exists() and not force:
-        raise FileExistsError(f"output already exists; use --force to overwrite: {output_h5}")
+    _validate_apply_paths(input_h5, sph_source, output_h5, force=force)
     input_h5_sha256 = file_sha256(input_h5)
     sph_source_sha256 = file_sha256(sph_source)
     openmc_provenance = provenance_before_hdf5_mutation(input_h5)
@@ -282,13 +285,16 @@ def apply_sph_to_hdf5(
         mixture_names=mixture_names,
         energy_groups=energy_groups,
     )
-    _verify_bound_input_hash(loaded.root_sph_attrs, input_h5_sha256)
+    sidecar_input_hash_verified = _verify_bound_input_hash(loaded.root_sph_attrs, input_h5_sha256)
+    binding_mode = "converter-final-exact-input" if sidecar_input_hash_verified else "converter-unbound"
 
-    output_h5.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(input_h5, output_h5)
     scaled_count = 0
     sph_matrix = np.stack([loaded.sph[name] for name in mixture_names])
-    with h5py.File(output_h5, "r+") as h5:
+    with _staged_sph_output(
+        input_h5, sph_source, output_h5, force=force,
+        input_sha256=input_h5_sha256, sidecar_sha256=sph_source_sha256,
+        provenance=openmc_provenance,
+    ) as staged_h5, h5py.File(staged_h5, "r+") as h5:
         for mixture_name in mixture_names:
             mixture_group = h5["mixtures"][mixture_name]
             scaled_count += _apply_to_mixture_group(
@@ -307,14 +313,9 @@ def apply_sph_to_hdf5(
             input_h5_sha256=input_h5_sha256,
             sph_source=sph_source,
             sph_source_sha256=sph_source_sha256,
-            binding_mode="converter-final-exact-input",
-            sidecar_input_hash_verified=True,
+            binding_mode=binding_mode,
+            sidecar_input_hash_verified=sidecar_input_hash_verified,
         )
-    refresh_openmc_provenance_after_hdf5_mutation(
-        output_h5,
-        openmc_provenance,
-    )
-
     return SphApplyReport(
         input_h5=input_h5,
         sph_source=sph_source,
@@ -326,8 +327,8 @@ def apply_sph_to_hdf5(
         sph_max=float(np.max(sph_matrix)),
         input_h5_sha256=input_h5_sha256,
         sph_source_sha256=sph_source_sha256,
-        binding_mode="converter-final-exact-input",
-        sidecar_input_hash_verified=True,
+        binding_mode=binding_mode,
+        sidecar_input_hash_verified=sidecar_input_hash_verified,
     )
 
 
@@ -357,14 +358,7 @@ def apply_sph_to_openmc_mgxs_hdf5(
     input_h5 = Path(input_h5)
     sph_source = Path(sph_source)
     output_h5 = Path(output_h5)
-    if not input_h5.exists():
-        raise FileNotFoundError(f"input HDF5 does not exist: {input_h5}")
-    if not sph_source.exists():
-        raise FileNotFoundError(f"SPH source does not exist: {sph_source}")
-    if input_h5.resolve() == output_h5.resolve():
-        raise ValueError("output HDF5 must be different from input HDF5")
-    if output_h5.exists() and not force:
-        raise FileExistsError(f"output already exists; use --force to overwrite: {output_h5}")
+    _validate_apply_paths(input_h5, sph_source, output_h5, force=force)
     input_h5_sha256 = file_sha256(input_h5)
     sph_source_sha256 = file_sha256(sph_source)
     openmc_provenance = provenance_before_hdf5_mutation(input_h5)
@@ -385,11 +379,13 @@ def apply_sph_to_openmc_mgxs_hdf5(
         energy_groups=energy_groups,
     )
 
-    output_h5.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(input_h5, output_h5)
     scaled_count = 0
     sph_matrix = np.stack([loaded.sph[name] for name in mixture_names])
-    with h5py.File(output_h5, "r+") as h5:
+    with _staged_sph_output(
+        input_h5, sph_source, output_h5, force=force,
+        input_sha256=input_h5_sha256, sidecar_sha256=sph_source_sha256,
+        provenance=openmc_provenance,
+    ) as staged_h5, h5py.File(staged_h5, "r+") as h5:
         for macro_name, mixture_name in zip(macroscopic_names, mixture_names, strict=True):
             scaled_count += _apply_to_openmc_macro_group(h5[macro_name], loaded.sph[mixture_name])
         h5.attrs["sph_applied"] = True
@@ -410,11 +406,6 @@ def apply_sph_to_openmc_mgxs_hdf5(
             binding_mode="openmc-mgxs-intermediate-unbound",
             sidecar_input_hash_verified=False,
         )
-    refresh_openmc_provenance_after_hdf5_mutation(
-        output_h5,
-        openmc_provenance,
-    )
-
     return SphApplyReport(
         input_h5=input_h5,
         sph_source=sph_source,
@@ -430,6 +421,40 @@ def apply_sph_to_openmc_mgxs_hdf5(
         sidecar_input_hash_verified=False,
         input_format="openmc-mgxs",
     )
+
+
+def _validate_apply_paths(input_h5: Path, sph_source: Path, output_h5: Path, *, force: bool) -> None:
+    for path, label in ((input_h5, "input HDF5"), (sph_source, "SPH source")):
+        if not path.is_file():
+            raise FileNotFoundError(f"{label} does not exist or is not a file: {path}")
+        if output_h5.resolve() == path.resolve() or (
+            output_h5.exists() and output_h5.samefile(path)
+        ):
+            raise ValueError(f"output HDF5 must be different from {label}")
+    if output_h5.exists() and (not force or not output_h5.is_file()):
+        raise FileExistsError(f"output already exists; use --force for a file: {output_h5}")
+
+
+@contextmanager
+def _staged_sph_output(
+    input_h5: Path, sph_source: Path, output_h5: Path, *, force: bool,
+    input_sha256: str, sidecar_sha256: str, provenance,
+):
+    """Publish only a fully written/rebound result; never expose partial XS."""
+    output_h5.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".openmc2donjon-sph-", dir=output_h5.parent) as directory:
+        staged_h5 = Path(directory) / output_h5.name
+        shutil.copy2(input_h5, staged_h5)
+        yield staged_h5
+        if file_sha256(input_h5) != input_sha256 or file_sha256(sph_source) != sidecar_sha256:
+            raise ValueError("SPH input or sidecar changed during processing; output not published")
+        refresh_openmc_provenance_after_hdf5_mutation(staged_h5, provenance)
+        if force:
+            os.replace(staged_h5, output_h5)
+        else:
+            # Both paths are on one filesystem. Refuse a destination created
+            # after the initial path check instead of overwriting it in a race.
+            os.link(staged_h5, output_h5)
 
 
 def _copy_sph_provenance_attrs(h5: Any, attrs: dict[str, Any]) -> None:
@@ -496,10 +521,10 @@ def _write_apply_bindings(
     )
 
 
-def _verify_bound_input_hash(attrs: dict[str, Any], input_h5_sha256: str) -> None:
+def _verify_bound_input_hash(attrs: dict[str, Any], input_h5_sha256: str) -> bool:
     recorded = _text_attr(attrs.get("sph_input_h5_sha256", "")).strip().lower()
     if not recorded:
-        return
+        return False
     if not _is_sha256(recorded):
         raise ValueError(
             "SPH sidecar sph_input_h5_sha256 is not a well-formed SHA-256 digest"
@@ -509,26 +534,30 @@ def _verify_bound_input_hash(attrs: dict[str, Any], input_h5_sha256: str) -> Non
             "SPH sidecar is bound to a different input HDF5 SHA-256; "
             "recompute the sidecar for this input"
         )
+    return True
 
 
 def _apply_to_mixture_group(group: Any, sph: np.ndarray) -> int:
     scaled = 0
     if "states" in group and hasattr(group["states"], "keys"):
         for state_name in group["states"]:
-            scaled += _apply_to_calculation_group(group["states"][state_name], sph)
+            scaled += _apply_to_calculation_group(
+                group["states"][state_name], sph, parent_attrs=group.attrs,
+            )
         _replace_dataset(group, "applied_sph", sph)
         _remove_sph_datasets(group)
         return scaled
     return _apply_to_calculation_group(group, sph)
 
 
-def _apply_to_calculation_group(group: Any, sph: np.ndarray) -> int:
+def _apply_to_calculation_group(group: Any, sph: np.ndarray, *, parent_attrs=None) -> int:
     datasets = {
-        name: np.asarray(group[name][:], dtype=float)
+        name: np.asarray(group[name][()], dtype=float)
         for name in group
-        if hasattr(group[name], "shape")
+        if name in VECTOR_XS_DATASETS or _is_std_dev_of_scaled_vector(name)
+        or name in ("scatter_matrix", "scatter_matrix_std_dev")
     }
-    scatter_axes = _text_attr(group.attrs.get("scatter_axes", "moment,from,to"))
+    scatter_axes = scatter_axes_from_attrs(group.attrs, parent_attrs, group.file.attrs)
     applied = apply_sph_to_mixture_arrays(
         datasets,
         sph,
@@ -610,9 +639,14 @@ def _remove_sph_datasets(group: Any) -> None:
 
 
 def _replace_dataset(group: Any, name: str, values: np.ndarray) -> None:
+    attrs = dict(group[name].attrs) if name in group else {}
     if name in group:
         del group[name]
-    group.create_dataset(name, data=np.asarray(values, dtype=float))
+    dataset = group.create_dataset(name, data=np.asarray(values, dtype=float))
+    # Scaling does not invalidate units, axes, or conditional uncertainty
+    # annotations. Keep those alongside the unchanged provenance metadata.
+    for key, value in attrs.items():
+        dataset.attrs[key] = value
 
 
 def _scale_vector(values: np.ndarray, sph: np.ndarray, label: str) -> np.ndarray:
@@ -636,13 +670,6 @@ def _sph_vector(values: np.ndarray) -> np.ndarray:
     if np.any(vector <= 0.0):
         raise ValueError("SPH vector must contain positive values")
     return vector
-
-
-def _scatter_axes(value: str) -> tuple[str, str, str]:
-    axes = tuple(part.strip().lower() for part in str(value).split(","))
-    if len(axes) != 3:
-        raise ValueError(f"scatter_axes must contain three comma-separated axes, got {value!r}")
-    return axes  # type: ignore[return-value]
 
 
 def _text_attr(value: Any) -> str:
